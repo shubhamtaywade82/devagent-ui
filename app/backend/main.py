@@ -82,7 +82,13 @@ async def create_project(project: ProjectCreate):
             "updated_at": None
         }
         project_id = await db.create_project(project_data)
-        return {"id": str(project_id), **project_data}
+        # Fetch the created project to get properly serialized data
+        created_project = await db.get_project(project_id)
+        if not created_project:
+            raise HTTPException(status_code=500, detail="Failed to retrieve created project")
+        return created_project
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -135,7 +141,13 @@ async def save_file(file: FileCreate):
             "updated_at": None
         }
         file_id = await db.save_file(file_data)
-        return {"id": str(file_id), **file_data}
+        # Fetch the saved file to get properly serialized data
+        saved_file = await db.get_file(file.project_id, file.path)
+        if not saved_file:
+            raise HTTPException(status_code=500, detail="Failed to retrieve saved file")
+        return saved_file
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

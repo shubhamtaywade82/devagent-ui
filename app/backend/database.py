@@ -31,6 +31,11 @@ class Database:
             if project:
                 project["id"] = str(project["_id"])
                 del project["_id"]
+                # Convert datetime objects to ISO format strings
+                if "created_at" in project and project["created_at"]:
+                    project["created_at"] = project["created_at"].isoformat()
+                if "updated_at" in project and project["updated_at"]:
+                    project["updated_at"] = project["updated_at"].isoformat()
             return project
         except:
             return None
@@ -42,6 +47,11 @@ class Database:
         async for project in cursor:
             project["id"] = str(project["_id"])
             del project["_id"]
+            # Convert datetime objects to ISO format strings
+            if "created_at" in project and project["created_at"]:
+                project["created_at"] = project["created_at"].isoformat()
+            if "updated_at" in project and project["updated_at"]:
+                project["updated_at"] = project["updated_at"].isoformat()
             projects.append(project)
         return projects
 
@@ -82,6 +92,9 @@ class Database:
         async for file in cursor:
             file["id"] = str(file["_id"])
             del file["_id"]
+            # Convert datetime objects to ISO format strings
+            if "updated_at" in file and file["updated_at"]:
+                file["updated_at"] = file["updated_at"].isoformat()
             files.append(file)
         return files
 
@@ -94,6 +107,9 @@ class Database:
         if file:
             file["id"] = str(file["_id"])
             del file["_id"]
+            # Convert datetime objects to ISO format strings
+            if "updated_at" in file and file["updated_at"]:
+                file["updated_at"] = file["updated_at"].isoformat()
         return file
 
     async def delete_file(self, project_id: str, path: str) -> bool:
