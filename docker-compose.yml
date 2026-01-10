@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   mongodb:
@@ -56,4 +56,3 @@ volumes:
 networks:
   devagent-network:
     driver: bridge
-
