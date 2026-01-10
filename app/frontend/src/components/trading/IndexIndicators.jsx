@@ -45,31 +45,38 @@ function IndexIndicators({ accessToken }) {
             const instruments = Array.isArray(feedData) ? feedData : [feedData];
 
             instruments.forEach((instrument) => {
+              if (!instrument) return;
+
               // Check which instrument this data is for
-              const securityId =
+              // Try multiple field names and normalize to string for comparison
+              const securityId = String(
                 instrument.securityId ||
-                instrument.security_id ||
-                instrument.SECURITY_ID ||
-                instrument.securityId?.toString();
+                  instrument.security_id ||
+                  instrument.SECURITY_ID ||
+                  instrument.security_id ||
+                  instrument.id ||
+                  ""
+              );
 
-              const niftyId = INDEX_INSTRUMENTS.NIFTY.securityId.toString();
-              const sensexId = INDEX_INSTRUMENTS.SENSEX.securityId.toString();
+              const niftyId = String(INDEX_INSTRUMENTS.NIFTY.securityId);
+              const sensexId = String(INDEX_INSTRUMENTS.SENSEX.securityId);
 
-              if (
-                securityId === niftyId ||
-                securityId === INDEX_INSTRUMENTS.NIFTY.securityId
-              ) {
+              // Match by security ID
+              if (securityId === niftyId) {
+                console.log("NIFTY data received:", instrument);
                 setNiftyData(instrument);
-              } else if (
-                securityId === sensexId ||
-                securityId === INDEX_INSTRUMENTS.SENSEX.securityId
-              ) {
+              } else if (securityId === sensexId) {
+                console.log("SENSEX data received:", instrument);
                 setSensexData(instrument);
               }
             });
           }
           setError("");
+        } else if (data.type === "connected") {
+          console.log("Market feed connected:", data.message);
+          setIsConnected(true);
         } else if (data.type === "error") {
+          console.error("Market feed error:", data.message);
           setError(data.message);
         }
       },
@@ -104,7 +111,7 @@ function IndexIndicators({ accessToken }) {
               2,
             ], // SENSEX Quote mode
           ],
-          version: "v2",
+          version: "v1",
         });
         setIsConnected(true);
         setError("");
@@ -167,16 +174,26 @@ function IndexIndicators({ accessToken }) {
             <>
               <div className="text-sm font-bold text-white">
                 {formatPrice(
-                  niftyData.lastPrice || niftyData.last_price || niftyData.ltp
+                  niftyData.lastPrice ||
+                    niftyData.last_price ||
+                    niftyData.ltp ||
+                    niftyData.LTP ||
+                    niftyData.close ||
+                    niftyData.price
                 )}
               </div>
-              <div className={`text-xs ${getChangeColor(
-                niftyData.change || niftyData.changePercent
-              )}`}>
+              <div
+                className={`text-xs ${getChangeColor(
+                  niftyData.change || niftyData.changePercent
+                )}`}
+              >
+                {formatChange(niftyData.change, niftyData.changePercent).value}{" "}
+                (
                 {
                   formatChange(niftyData.change, niftyData.changePercent)
-                    .value
-                } ({formatChange(niftyData.change, niftyData.changePercent).percent})
+                    .percent
+                }
+                )
               </div>
             </>
           ) : (
@@ -199,16 +216,27 @@ function IndexIndicators({ accessToken }) {
                 {formatPrice(
                   sensexData.lastPrice ||
                     sensexData.last_price ||
-                    sensexData.ltp
+                    sensexData.ltp ||
+                    sensexData.LTP ||
+                    sensexData.close ||
+                    sensexData.price
                 )}
               </div>
-              <div className={`text-xs ${getChangeColor(
-                sensexData.change || sensexData.changePercent
-              )}`}>
+              <div
+                className={`text-xs ${getChangeColor(
+                  sensexData.change || sensexData.changePercent
+                )}`}
+              >
                 {
                   formatChange(sensexData.change, sensexData.changePercent)
                     .value
-                } ({formatChange(sensexData.change, sensexData.changePercent).percent})
+                }{" "}
+                (
+                {
+                  formatChange(sensexData.change, sensexData.changePercent)
+                    .percent
+                }
+                )
               </div>
             </>
           ) : (
@@ -236,7 +264,10 @@ function IndexIndicators({ accessToken }) {
       </div>
 
       {error && (
-        <div className="text-xs text-red-400 max-w-[200px] truncate" title={error}>
+        <div
+          className="text-xs text-red-400 max-w-[200px] truncate"
+          title={error}
+        >
           {error}
         </div>
       )}

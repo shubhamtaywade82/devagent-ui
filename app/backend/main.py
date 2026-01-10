@@ -1125,21 +1125,25 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
 
         # Convert instruments to tuples if needed
         # Expected format: [(exchange_code, security_id, feed_request_code), ...]
+        # exchange_code: 1=NSE, 2=BSE
+        # security_id: Security ID (must be int)
+        # feed_request_code: 1=Ticker, 2=Quote, 3=Full, 4=Market Depth, 5=OI, 6=Previous Day
         instrument_tuples = []
         for inst in instruments:
             if isinstance(inst, (list, tuple)) and len(inst) >= 2:
                 # Ensure we have 3 elements (exchange_code, security_id, feed_request_code)
-                if len(inst) == 2:
-                    # Default to Quote mode (2) if feed_request_code not provided
-                    instrument_tuples.append((inst[0], inst[1], 2))
-                else:
-                    instrument_tuples.append(tuple(inst[:3]))
+                exchange_code = int(inst[0])
+                security_id = int(inst[1]) if isinstance(inst[1], (int, str)) else int(str(inst[1]))
+                feed_code = int(inst[2]) if len(inst) >= 3 else 2  # Default to Quote mode
+                instrument_tuples.append((exchange_code, security_id, feed_code))
             else:
                 await manager.send_personal_message({
                     "type": "error",
                     "message": f"Invalid instrument format: {inst}. Expected [exchange_code, security_id, feed_request_code]"
                 }, websocket)
                 return
+
+        print(f"Subscribing to {len(instrument_tuples)} instruments: {instrument_tuples}")
 
         # Create market feed instance
         try:
@@ -1195,13 +1199,40 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
                     # get_data() returns data from the market feed queue
                     response = market_feed.get_data()
                     if response:
+                        # MarketFeed returns data in various formats - normalize it
+                        # It could be a dict, list, or nested structure
+                        processed_data = response
+
+                        # If it's a dict with nested data, extract it
+                        if isinstance(response, dict):
+                            # Check for common MarketFeed response structures
+                            if 'data' in response:
+                                processed_data = response['data']
+                            elif 'instruments' in response:
+                                processed_data = response['instruments']
+                            elif 'quote' in response:
+                                processed_data = response['quote']
+                            elif 'ticker' in response:
+                                processed_data = response['ticker']
+
+                        # Ensure security_id is a string for consistent matching
+                        if isinstance(processed_data, dict):
+                            # Normalize security_id field
+                            if 'security_id' in processed_data:
+                                processed_data['security_id'] = str(processed_data['security_id'])
+                            if 'securityId' in processed_data:
+                                processed_data['securityId'] = str(processed_data['securityId'])
+                            if 'SECURITY_ID' in processed_data:
+                                processed_data['SECURITY_ID'] = str(processed_data['SECURITY_ID'])
+
                         # Process and send data to client
                         await manager.send_personal_message({
                             "type": "market_feed",
-                            "data": response
+                            "data": processed_data
                         }, websocket)
                     await asyncio.sleep(0.05)  # Small delay to prevent CPU spinning
                 except Exception as e:
+                    print(f"Error processing market feed data: {e}")
                     await manager.send_personal_message({
                         "type": "error",
                         "message": str(e)
