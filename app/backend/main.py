@@ -10,6 +10,7 @@ import json
 
 from database import Database
 from models import Project, File, ChatMessage
+from trading import trading_service
 
 load_dotenv()
 
@@ -73,6 +74,61 @@ class ComponentGenerateRequest(BaseModel):
 class DesignSystemRequest(BaseModel):
     description: str
     style: str = "modern"
+
+
+# Trading Request Models
+class TradingAuthRequest(BaseModel):
+    pin: Optional[str] = None
+    totp: Optional[str] = None
+    token_id: Optional[str] = None
+
+
+class PlaceOrderRequest(BaseModel):
+    access_token: str
+    security_id: str
+    exchange_segment: str
+    transaction_type: str
+    quantity: int
+    order_type: str
+    product_type: str
+    price: float = 0
+    trigger_price: float = 0
+    disclosed_quantity: int = 0
+    validity: str = "DAY"
+
+
+class ModifyOrderRequest(BaseModel):
+    access_token: str
+    order_id: str
+    order_type: Optional[str] = None
+    leg_name: Optional[str] = None
+    quantity: Optional[int] = None
+    price: Optional[float] = None
+    trigger_price: Optional[float] = None
+    disclosed_quantity: Optional[int] = None
+    validity: Optional[str] = None
+
+
+class MarketQuoteRequest(BaseModel):
+    access_token: str
+    securities: dict
+
+
+class OptionChainRequest(BaseModel):
+    access_token: str
+    under_security_id: int
+    under_exchange_segment: str
+    expiry: str
+
+
+class HistoricalDataRequest(BaseModel):
+    access_token: str
+    security_id: int
+    exchange_segment: str
+    instrument_type: str
+    from_date: str
+    to_date: str
+    interval: str = "daily"
 
 
 # Health check
@@ -548,6 +604,202 @@ Return a JSON object with all these properties. Use a dark theme with violet/blu
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Trading endpoints
+@app.post("/api/trading/auth/pin")
+async def trading_auth_pin(request: TradingAuthRequest):
+    """Authenticate with PIN and TOTP"""
+    if not request.pin or not request.totp:
+        raise HTTPException(status_code=400, detail="PIN and TOTP are required")
+    result = trading_service.authenticate_with_pin(request.pin, request.totp)
+    if not result.get("success"):
+        raise HTTPException(status_code=401, detail=result.get("error", "Authentication failed"))
+    return result
+
+
+@app.post("/api/trading/auth/oauth")
+async def trading_auth_oauth():
+    """Generate OAuth consent URL"""
+    result = trading_service.authenticate_oauth(
+        trading_service.app_id or "",
+        trading_service.app_secret or ""
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "OAuth initialization failed"))
+    return result
+
+
+@app.post("/api/trading/auth/consume")
+async def trading_auth_consume(request: TradingAuthRequest):
+    """Consume token ID from OAuth redirect"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Token ID is required")
+    result = trading_service.consume_token_id(
+        request.token_id,
+        trading_service.app_id or "",
+        trading_service.app_secret or ""
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=401, detail=result.get("error", "Token consumption failed"))
+    return result
+
+
+@app.post("/api/trading/profile")
+async def trading_profile(request: TradingAuthRequest):
+    """Get user profile"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_user_profile(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get profile"))
+    return result
+
+
+@app.post("/api/trading/orders/place")
+async def place_order(request: PlaceOrderRequest):
+    """Place a trading order"""
+    result = trading_service.place_order(request.access_token, request.dict())
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to place order"))
+    return result
+
+
+@app.post("/api/trading/orders")
+async def get_orders(request: TradingAuthRequest):
+    """Get all orders"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_orders(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get orders"))
+    return result
+
+
+@app.get("/api/trading/orders/{order_id}")
+async def get_order(order_id: str, access_token: str):
+    """Get order by ID"""
+    result = trading_service.get_order_by_id(access_token, order_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get order"))
+    return result
+
+
+@app.post("/api/trading/orders/{order_id}/cancel")
+async def cancel_order(order_id: str, request: TradingAuthRequest):
+    """Cancel an order"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.cancel_order(request.token_id, order_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to cancel order"))
+    return result
+
+
+@app.post("/api/trading/orders/{order_id}/modify")
+async def modify_order(order_id: str, request: ModifyOrderRequest):
+    """Modify an order"""
+    result = trading_service.modify_order(request.access_token, order_id, request.dict())
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to modify order"))
+    return result
+
+
+@app.post("/api/trading/positions")
+async def get_positions(request: TradingAuthRequest):
+    """Get current positions"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_positions(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get positions"))
+    return result
+
+
+@app.post("/api/trading/holdings")
+async def get_holdings(request: TradingAuthRequest):
+    """Get current holdings"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_holdings(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get holdings"))
+    return result
+
+
+@app.post("/api/trading/funds")
+async def get_funds(request: TradingAuthRequest):
+    """Get fund limits and margin details"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_fund_limits(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get funds"))
+    return result
+
+
+@app.post("/api/trading/market/quote")
+async def get_market_quote(request: MarketQuoteRequest):
+    """Get market quote data"""
+    result = trading_service.get_market_quote(request.access_token, request.securities)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get market quote"))
+    return result
+
+
+@app.post("/api/trading/market/option-chain")
+async def get_option_chain(request: OptionChainRequest):
+    """Get option chain data"""
+    result = trading_service.get_option_chain(
+        request.access_token,
+        request.under_security_id,
+        request.under_exchange_segment,
+        request.expiry
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get option chain"))
+    return result
+
+
+@app.post("/api/trading/market/historical")
+async def get_historical_data(request: HistoricalDataRequest):
+    """Get historical data"""
+    result = trading_service.get_historical_data(
+        request.access_token,
+        request.security_id,
+        request.exchange_segment,
+        request.instrument_type,
+        request.from_date,
+        request.to_date,
+        request.interval
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get historical data"))
+    return result
+
+
+@app.post("/api/trading/securities")
+async def get_securities(request: TradingAuthRequest):
+    """Get security/instrument list"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_security_list(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get securities"))
+    return result
+
+
+@app.post("/api/trading/expiry-list")
+async def get_expiry_list(request: OptionChainRequest):
+    """Get expiry list for underlying"""
+    result = trading_service.get_expiry_list(
+        request.access_token,
+        request.under_security_id,
+        request.under_exchange_segment
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get expiry list"))
+    return result
 
 
 if __name__ == "__main__":

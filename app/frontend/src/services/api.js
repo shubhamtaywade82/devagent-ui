@@ -76,5 +76,86 @@ export default {
     })
     return response.data
   },
+
+  // Trading APIs
+  async tradingAuthPin(data) {
+    const response = await api.post('/api/trading/auth/pin', data)
+    return response.data
+  },
+
+  async tradingAuthOAuth() {
+    const response = await api.post('/api/trading/auth/oauth')
+    return response.data
+  },
+
+  async tradingAuthConsume(data) {
+    const response = await api.post('/api/trading/auth/consume', data)
+    return response.data
+  },
+
+  async getTradingProfile(data) {
+    const response = await api.post('/api/trading/profile', data)
+    return response.data
+  },
+
+  async placeOrder(data) {
+    const response = await api.post('/api/trading/orders/place', data)
+    return response.data
+  },
+
+  async getOrders(accessToken) {
+    const response = await api.post('/api/trading/orders', { token_id: accessToken })
+    return response.data
+  },
+
+  async cancelOrder(orderId, accessToken) {
+    const response = await api.post(`/api/trading/orders/${orderId}/cancel`, { token_id: accessToken })
+    return response.data
+  },
+
+  async modifyOrder(orderId, data) {
+    const response = await api.post(`/api/trading/orders/${orderId}/modify`, data)
+    return response.data
+  },
+
+  async getPositions(accessToken) {
+    const response = await api.post('/api/trading/positions', { token_id: accessToken })
+    return response.data
+  },
+
+  async getHoldings(accessToken) {
+    const response = await api.post('/api/trading/holdings', { token_id: accessToken })
+    return response.data
+  },
+
+  async getFunds(accessToken) {
+    const response = await api.post('/api/trading/funds', { token_id: accessToken })
+    return response.data
+  },
+
+  async getMarketQuote(data) {
+    const response = await api.post('/api/trading/market/quote', data)
+    return response.data
+  },
+
+  async getOptionChain(data) {
+    const response = await api.post('/api/trading/market/option-chain', data)
+    return response.data
+  },
+
+  async getHistoricalData(data) {
+    const response = await api.post('/api/trading/market/historical', data)
+    return response.data
+  },
+
+  async getSecurities(accessToken) {
+    const response = await api.post('/api/trading/securities', { token_id: accessToken })
+    return response.data
+  },
+
+  async getExpiryList(data) {
+    const response = await api.post('/api/trading/expiry-list', data)
+    return response.data
+  },
 }
 
