@@ -23,11 +23,50 @@ function PortfolioView({ accessToken }) {
         api.getFunds(accessToken)
       ])
 
-      if (holdingsData.success) setHoldings(holdingsData.data || [])
-      if (positionsData.success) setPositions(positionsData.data || [])
-      if (fundsData.success) setFunds(fundsData.data)
+      // Handle holdings data - ensure it's always an array
+      if (holdingsData.success) {
+        const holdingsArray = Array.isArray(holdingsData.data)
+          ? holdingsData.data
+          : holdingsData.data?.data ||
+            holdingsData.data?.holdings ||
+            holdingsData.data?.holding ||
+            [];
+        setHoldings(holdingsArray);
+        console.log('Holdings data:', holdingsArray);
+      } else {
+        setHoldings([]);
+        console.error('Holdings error:', holdingsData.error);
+      }
+
+      // Handle positions data - ensure it's always an array
+      if (positionsData.success) {
+        const positionsArray = Array.isArray(positionsData.data)
+          ? positionsData.data
+          : positionsData.data?.data ||
+            positionsData.data?.positions ||
+            positionsData.data?.position ||
+            [];
+        setPositions(positionsArray);
+        console.log('Positions data:', positionsArray);
+      } else {
+        setPositions([]);
+        console.error('Positions error:', positionsData.error);
+      }
+
+      // Handle funds data
+      if (fundsData.success) {
+        const fundsDataValue = fundsData.data?.data || fundsData.data;
+        setFunds(fundsDataValue);
+        console.log('Funds data:', fundsDataValue);
+      } else {
+        setFunds(null);
+        console.error('Funds error:', fundsData.error);
+      }
     } catch (error) {
       console.error('Failed to load portfolio:', error)
+      // Ensure arrays are set even on error
+      setHoldings([]);
+      setPositions([]);
     } finally {
       setLoading(false)
     }
@@ -121,7 +160,7 @@ function PortfolioView({ accessToken }) {
       {activeTab === 'holdings' && (
         <div className="glass rounded-lg p-6">
           <h2 className="text-lg font-semibold mb-4">Holdings</h2>
-          {holdings.length === 0 ? (
+          {!Array.isArray(holdings) || holdings.length === 0 ? (
             <div className="text-center text-zinc-500 py-8">No holdings</div>
           ) : (
             <div className="overflow-x-auto">
@@ -138,14 +177,17 @@ function PortfolioView({ accessToken }) {
                 </thead>
                 <tbody>
                   {holdings.map((holding, idx) => {
-                    const pnl = (holding.lastPrice - holding.averagePrice) * holding.quantity
-                    const value = holding.lastPrice * holding.quantity
+                    const lastPrice = holding.lastPrice || holding.ltp || holding.currentPrice || 0;
+                    const avgPrice = holding.averagePrice || holding.avgPrice || holding.average_price || 0;
+                    const quantity = holding.quantity || holding.qty || 0;
+                    const pnl = (lastPrice - avgPrice) * quantity;
+                    const value = lastPrice * quantity;
                     return (
                       <tr key={idx} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                        <td className="py-3 px-4 text-white">{holding.tradingSymbol || holding.securityId}</td>
-                        <td className="py-3 px-4 text-white">{holding.quantity}</td>
-                        <td className="py-3 px-4 text-white">₹{holding.averagePrice?.toFixed(2) || '0.00'}</td>
-                        <td className="py-3 px-4 text-white">₹{holding.lastPrice?.toFixed(2) || '0.00'}</td>
+                        <td className="py-3 px-4 text-white">{holding.tradingSymbol || holding.symbol || holding.securityId || 'N/A'}</td>
+                        <td className="py-3 px-4 text-white">{quantity}</td>
+                        <td className="py-3 px-4 text-white">₹{avgPrice.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-white">₹{lastPrice.toFixed(2)}</td>
                         <td className={`py-3 px-4 text-right font-medium ${
                           pnl >= 0 ? 'text-green-500' : 'text-red-500'
                         }`}>
@@ -166,7 +208,7 @@ function PortfolioView({ accessToken }) {
       {activeTab === 'positions' && (
         <div className="glass rounded-lg p-6">
           <h2 className="text-lg font-semibold mb-4">Open Positions</h2>
-          {positions.length === 0 ? (
+          {!Array.isArray(positions) || positions.length === 0 ? (
             <div className="text-center text-zinc-500 py-8">No open positions</div>
           ) : (
             <div className="overflow-x-auto">
@@ -181,19 +223,25 @@ function PortfolioView({ accessToken }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {positions.map((pos, idx) => (
-                    <tr key={idx} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
-                      <td className="py-3 px-4 text-white">{pos.tradingSymbol || pos.securityId}</td>
-                      <td className="py-3 px-4 text-white">{pos.quantity}</td>
-                      <td className="py-3 px-4 text-white">₹{pos.averagePrice?.toFixed(2) || '0.00'}</td>
-                      <td className="py-3 px-4 text-white">₹{pos.lastPrice?.toFixed(2) || '0.00'}</td>
-                      <td className={`py-3 px-4 text-right font-medium ${
-                        (pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'
-                      }`}>
-                        ₹{(pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || 0).toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
+                  {positions.map((pos, idx) => {
+                    const avgPrice = pos.averagePrice || pos.avgPrice || pos.average_price || 0;
+                    const lastPrice = pos.lastPrice || pos.ltp || pos.currentPrice || 0;
+                    const quantity = pos.quantity || pos.qty || 0;
+                    const pnl = pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || pos.unrealized_pnl || 0;
+                    return (
+                      <tr key={idx} className="border-b border-zinc-800/50 hover:bg-zinc-800/30">
+                        <td className="py-3 px-4 text-white">{pos.tradingSymbol || pos.symbol || pos.securityId || 'N/A'}</td>
+                        <td className="py-3 px-4 text-white">{quantity}</td>
+                        <td className="py-3 px-4 text-white">₹{avgPrice.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-white">₹{lastPrice.toFixed(2)}</td>
+                        <td className={`py-3 px-4 text-right font-medium ${
+                          pnl >= 0 ? 'text-green-500' : 'text-red-500'
+                        }`}>
+                          ₹{pnl.toFixed(2)}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
