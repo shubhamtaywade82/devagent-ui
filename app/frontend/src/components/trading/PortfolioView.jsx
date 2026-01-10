@@ -33,6 +33,18 @@ function PortfolioView({ accessToken }) {
     }
   }
 
+  // Helper function to safely extract fund values with fallbacks
+  const getFundValue = (funds, ...keys) => {
+    if (!funds) return 0
+    for (const key of keys) {
+      const value = funds[key]
+      if (value !== undefined && value !== null) {
+        return typeof value === 'number' ? value : parseFloat(value) || 0
+      }
+    }
+    return 0
+  }
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -40,6 +52,10 @@ function PortfolioView({ accessToken }) {
       </div>
     )
   }
+
+  const totalBalance = getFundValue(funds, 'totalBalance', 'totalFunds', 'totalMargin', 'balance')
+  const availableBalance = getFundValue(funds, 'availableBalance', 'availableFunds', 'availableMargin', 'available')
+  const marginUsed = getFundValue(funds, 'marginUsed', 'marginUtilized', 'usedMargin', 'margin')
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -52,7 +68,7 @@ function PortfolioView({ accessToken }) {
               <Wallet className="w-5 h-5 text-blue-500" />
             </div>
             <div className="text-2xl font-bold text-white">
-              ₹{funds.totalBalance?.toLocaleString('en-IN') || '0.00'}
+              ₹{totalBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
           <div className="glass rounded-lg p-4">
@@ -61,7 +77,7 @@ function PortfolioView({ accessToken }) {
               <TrendingUp className="w-5 h-5 text-green-500" />
             </div>
             <div className="text-2xl font-bold text-white">
-              ₹{funds.availableBalance?.toLocaleString('en-IN') || '0.00'}
+              ₹{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
           <div className="glass rounded-lg p-4">
@@ -70,7 +86,7 @@ function PortfolioView({ accessToken }) {
               <TrendingDown className="w-5 h-5 text-orange-500" />
             </div>
             <div className="text-2xl font-bold text-white">
-              ₹{funds.marginUsed?.toLocaleString('en-IN') || '0.00'}
+              ₹{marginUsed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
         </div>
@@ -171,9 +187,9 @@ function PortfolioView({ accessToken }) {
                       <td className="py-3 px-4 text-white">₹{pos.averagePrice?.toFixed(2) || '0.00'}</td>
                       <td className="py-3 px-4 text-white">₹{pos.lastPrice?.toFixed(2) || '0.00'}</td>
                       <td className={`py-3 px-4 text-right font-medium ${
-                        (pos.unrealizedPnL || 0) >= 0 ? 'text-green-500' : 'text-red-500'
+                        (pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || 0) >= 0 ? 'text-green-500' : 'text-red-500'
                       }`}>
-                        ₹{(pos.unrealizedPnL || 0).toFixed(2)}
+                        ₹{(pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || 0).toFixed(2)}
                       </td>
                     </tr>
                   ))}
