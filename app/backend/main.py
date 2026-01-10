@@ -189,7 +189,9 @@ async def generate_ollama_response_stream(prompt: str):
             async with client.stream("POST", url, json=payload) as response:
                 if response.status_code != 200:
                     error_text = await response.aread()
-                    raise HTTPException(status_code=response.status_code, detail=error_text.decode())
+                    error_msg = f"⚠️ Error: {error_text.decode()}"
+                    yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+                    return
 
                 async for line in response.aiter_lines():
                     if line:
@@ -202,9 +204,13 @@ async def generate_ollama_response_stream(prompt: str):
                         except json.JSONDecodeError:
                             continue
     except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail="Ollama is not running. Please start Ollama: ollama serve")
+        # Send error through stream instead of raising exception
+        error_msg = "⚠️ Ollama is not running. Please start Ollama: `ollama serve`"
+        yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Send error through stream instead of raising exception
+        error_msg = f"❌ Error: {str(e)}"
+        yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
 
 
 async def generate_ollama_response(prompt: str):

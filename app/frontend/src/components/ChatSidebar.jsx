@@ -72,6 +72,10 @@ function ChatSidebar({ projectId, files }) {
                 newMessages[newMessages.length - 1].content = assistantMessage
                 return newMessages
               })
+              // Stop if we get an error or done flag
+              if (data.done || data.error) {
+                break
+              }
             } catch (e) {
               // Ignore parse errors
             }
