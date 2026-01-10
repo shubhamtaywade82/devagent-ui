@@ -28,19 +28,24 @@ def format_market_quote_result(data):
     # DhanHQ returns nested structure: data.data.data.{exchange_segment}.{security_id}
     # Navigate through the nested structure
     quote_data = None
-
+    
     if isinstance(data, dict):
-        # Try to find the actual quote data in nested structure
+        # Check for empty data first
         if "data" in data and isinstance(data["data"], dict):
-            if "data" in data["data"] and isinstance(data["data"]["data"], dict):
+            if "data" in data["data"]:
+                nested_data = data["data"]["data"]
+                # Check if nested data is empty
+                if isinstance(nested_data, dict) and len(nested_data) == 0:
+                    return "No market data available. The market might be closed or the security ID/exchange segment format is incorrect. For indices like NIFTY, use exchange_segment 'IDX_I'."
+                
                 # This is the nested structure: data.data.data.{exchange_segment}
-                nested = data["data"]["data"]
-                # Iterate through exchange segments (NSE_IDX, NSE_EQ, etc.)
+                nested = nested_data
+                # Iterate through exchange segments (IDX_I, NSE_EQ, NSE_IDX, etc.)
                 for exchange_seg, securities in nested.items():
                     if isinstance(securities, dict):
                         # Iterate through security IDs
                         for security_id, quote_info in securities.items():
-                            if isinstance(quote_info, dict):
+                            if isinstance(quote_info, dict) and quote_info:
                                 quote_data = quote_info
                                 break
                         if quote_data:
@@ -167,6 +172,39 @@ def format_holdings_result(data):
 """)
 
     formatted.append(f"\nTotal Portfolio Value: ₹{total_value:.2f}")
+    return "\n".join(formatted)
+
+
+def format_search_results(data):
+    """Format instrument search results for LLM understanding"""
+    if not data or not isinstance(data, dict):
+        return "No search results available"
+
+    instruments = data.get("instruments", [])
+    if not instruments or len(instruments) == 0:
+        return f"No instruments found for query: {data.get('query', '')}"
+
+    formatted = [f"Found {len(instruments)} instrument(s):\n"]
+
+    for inst in instruments:
+        symbol = inst.get("display_name") or inst.get("symbol_name") or inst.get("trading_symbol", "Unknown")
+        security_id = inst.get("security_id")
+        exchange_segment = inst.get("exchange_segment", "N/A")
+        instrument_type = inst.get("instrument_type", "")
+
+        formatted.append(f"""
+- {symbol}
+  Security ID: {security_id}
+  Exchange Segment: {exchange_segment}
+  Type: {instrument_type}
+
+  Use this security_id ({security_id}) and exchange_segment ({exchange_segment}) for:
+  - get_market_quote: {{"{exchange_segment}": [{security_id}]}}
+  - get_historical_data: security_id={security_id}, exchange_segment="{exchange_segment}"
+  - get_option_chain: under_security_id={security_id}, under_exchange_segment="{exchange_segment}"
+""")
+
+    formatted.append("\nSelect the appropriate instrument from above and use its security_id and exchange_segment for subsequent operations.")
     return "\n".join(formatted)
 
 load_dotenv()
@@ -652,7 +690,10 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                             if result.get("success"):
                                 # Format successful result
                                 data = result.get("data", {})
-                                if function_name == "get_market_quote":
+                                if function_name == "search_instruments":
+                                    # Format search results nicely
+                                    formatted_result = format_search_results(data)
+                                elif function_name == "get_market_quote":
                                     # Format market quote data nicely
                                     formatted_result = format_market_quote_result(data)
                                 elif function_name == "get_positions":
@@ -909,24 +950,33 @@ Provide a helpful, concise response with code examples when relevant."""
                             "role": "system",
                             "content": """You are a trading assistant with access to real-time market data via DhanHQ APIs through function calling tools.
 
-CRITICAL INSTRUCTIONS:
-1. When users ask about stock prices, positions, market data, or portfolio information, you MUST use the available tools to fetch real data
-2. DO NOT generate Python code or pseudo-code - use the actual function calling tools
-3. DO NOT ask users for more details - use the tools with the information you have
-4. For stock names like "HDFC Bank", use security ID 1333 with exchange_segment "NSE_EQ"
-5. For indices like "NIFTY", use security ID 99926000 with exchange_segment "NSE_IDX"
-6. Always call the appropriate tool first, then provide analysis based on the actual data returned
+CRITICAL WORKFLOW:
+1. When users ask about stocks, indices, or instruments by NAME (e.g., "NIFTY", "HDFC Bank", "RELIANCE"):
+   - FIRST: Call search_instruments with the name to find security_id and exchange_segment
+   - THEN: Use the returned security_id and exchange_segment for other operations (get_market_quote, get_historical_data, etc.)
+
+2. When users ask about prices, positions, market data, or portfolio information:
+   - Use the available tools to fetch real data
+   - DO NOT generate Python code or pseudo-code - use the actual function calling tools
+   - DO NOT ask users for more details - use the tools with the information you have
+
+3. Workflow example:
+   User: "What's the price of NIFTY?"
+   Step 1: Call search_instruments(query="NIFTY", instrument_type="INDEX")
+   Step 2: Use the returned security_id and exchange_segment to call get_market_quote
+   Step 3: Provide the actual price from the response
 
 Available tools:
-- get_market_quote: Get current prices (use this for price queries)
+- search_instruments: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
+- get_market_quote: Get current prices (requires security_id and exchange_segment from search_instruments)
+- get_historical_data: Get price history (requires security_id and exchange_segment)
 - get_positions: Get user's open positions
 - get_holdings: Get user's holdings
 - get_fund_limits: Get balance and margin
-- get_historical_data: Get price history for analysis
-- get_option_chain: Get options data
-- analyze_market: Comprehensive market analysis
+- get_option_chain: Get options data (requires security_id and exchange_segment)
+- analyze_market: Comprehensive market analysis (requires security_id and exchange_segment)
 
-Example: If user asks "What's the price of HDFC Bank?", immediately call get_market_quote with {"NSE_EQ": [1333]} and provide the actual price from the response."""
+IMPORTANT: Always search for instruments first if the user mentions a stock/index by name, then use the search results for subsequent operations."""
                         })
                     messages_list.append({"role": "user", "content": request.message})
 

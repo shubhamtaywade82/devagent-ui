@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import json
 from trading import trading_service
+from database import Database
 
 
 async def execute_tool(
@@ -35,10 +36,33 @@ async def execute_tool(
 
     try:
         # Route to appropriate TradingService method
-        if function_name == "get_market_quote":
+        if function_name == "search_instruments":
+            # Search instruments in database
+            return await search_instruments(
+                function_args.get("query", ""),
+                function_args.get("exchange_segment"),
+                function_args.get("instrument_type"),
+                function_args.get("limit", 10)
+            )
+        elif function_name == "get_market_quote":
+            # Handle IDX_I format for indices - convert to proper format for DhanHQ API
+            securities = function_args["securities"]
+            # If IDX_I is used, we need to handle it specially
+            # DhanHQ API might need it in a different format
+            processed_securities = {}
+            for exchange_seg, security_ids in securities.items():
+                if exchange_seg == "IDX_I":
+                    # For indices, try both IDX_I and NSE_IDX formats
+                    # Some APIs might accept IDX_I directly, others might need NSE_IDX
+                    processed_securities["IDX_I"] = security_ids
+                    # Also try NSE_IDX as fallback
+                    processed_securities["NSE_IDX"] = security_ids
+                else:
+                    processed_securities[exchange_seg] = security_ids
+            
             result = trading_service.get_market_quote(
                 access_token,
-                function_args["securities"]
+                processed_securities
             )
             return result
 

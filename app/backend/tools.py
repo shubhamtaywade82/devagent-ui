@@ -157,6 +157,38 @@ DHANHQ_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "search_instruments",
+            "description": "Search for instruments/securities by symbol name, trading symbol, or underlying symbol. Returns security ID, exchange segment, and instrument details. ALWAYS use this first when user asks about a stock, index, or instrument by name (e.g., 'NIFTY', 'HDFC Bank', 'RELIANCE'). Then use the returned security_id and exchange_segment for other operations like get_market_quote, get_historical_data, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query - symbol name, trading symbol, or underlying symbol (e.g., 'NIFTY', 'HDFC', 'RELIANCE', 'NIFTY 50')"
+                    },
+                    "exchange_segment": {
+                        "type": "string",
+                        "description": "Optional: Filter by exchange segment (e.g., 'NSE_EQ', 'NSE_FO', 'BSE_EQ', 'IDX_I' for indices). Leave empty to search all segments.",
+                        "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "IDX_I", "MCX_COM", "NCDEX_COM"]
+                    },
+                    "instrument_type": {
+                        "type": "string",
+                        "description": "Optional: Filter by instrument type (e.g., 'EQUITY', 'INDEX', 'FUTURES', 'OPTIONS')",
+                        "enum": ["EQUITY", "INDEX", "FUTURES", "OPTIONS", "COMMODITY"]
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default: 10)",
+                        "default": 10
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_market",
             "description": "Comprehensive market analysis combining current quotes and historical data. Fetches current price, recent trend, and provides analysis summary. Use for quick market overview and trend analysis.",
             "parameters": {
@@ -185,6 +217,7 @@ DHANHQ_TOOLS = [
 
 # Tool execution mapping
 TOOL_EXECUTORS = {
+    "search_instruments": "search_instruments",
     "get_market_quote": "get_market_quote",
     "get_historical_data": "get_historical_data",
     "get_positions": "get_positions",
