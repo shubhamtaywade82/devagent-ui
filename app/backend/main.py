@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Back
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Union
 import os
 from dotenv import load_dotenv
 import httpx
@@ -59,6 +59,9 @@ async def startup_event():
     """Initialize instruments on startup"""
     global sync_task
     db_instance = Database()
+
+    # Ensure indexes are created for performance
+    await db_instance.ensure_indexes()
 
     # Check if instruments exist, sync if needed
     instruments_exist = await db_instance.instruments_exist("detailed")
@@ -186,12 +189,12 @@ class OptionChainRequest(BaseModel):
 
 class HistoricalDataRequest(BaseModel):
     access_token: str
-    security_id: int
+    security_id: Union[int, str]  # Accept both int and string (official example uses string)
     exchange_segment: str
     instrument_type: str
-    from_date: str
-    to_date: str
-    interval: str = "daily"
+    from_date: str  # Format: "YYYY-MM-DD"
+    to_date: str    # Format: "YYYY-MM-DD"
+    interval: str = "daily"  # "daily" for daily data, "intraday" or "minute" for intraday minute data
 
 
 class TradeHistoryRequest(BaseModel):
@@ -886,10 +889,32 @@ async def get_option_chain(request: OptionChainRequest):
 
 @app.post("/api/trading/market/historical")
 async def get_historical_data(request: HistoricalDataRequest):
-    """Get historical data"""
+    """
+    Get historical data (daily or intraday minute data)
+
+    Per official DhanHQ example:
+    - Uses DhanContext for initialization
+    - Accepts security_id as string or int (converts to string internally)
+    - Supports both daily and intraday minute data
+    - Date format: "YYYY-MM-DD"
+
+    Example request:
+    {
+        "access_token": "your_token",
+        "security_id": "1333",  # or 1333 (will be converted to string)
+        "exchange_segment": "NSE_EQ",
+        "instrument_type": "EQUITY",
+        "from_date": "2023-01-01",
+        "to_date": "2023-01-31",
+        "interval": "daily"  # or "intraday" or "minute"
+    }
+    """
+    # Convert security_id to int for the method (it will convert to string internally)
+    security_id = int(request.security_id) if isinstance(request.security_id, str) else request.security_id
+
     result = trading_service.get_historical_data(
         request.access_token,
-        request.security_id,
+        security_id,
         request.exchange_segment,
         request.instrument_type,
         request.from_date,
@@ -918,20 +943,28 @@ async def get_instrument_list_csv(request: InstrumentListCSVRequest):
     if request.format_type not in ["compact", "detailed"]:
         raise HTTPException(status_code=400, detail="format_type must be 'compact' or 'detailed'")
 
-    # Try database first
-    instruments = await db.get_instruments(request.format_type)
-    if instruments:
-        return {
-            "success": True,
-            "data": {
-                "instruments": instruments,
-                "count": len(instruments),
-                "format": request.format_type,
-                "source": "database"
+    # Try database first (with timeout protection)
+    try:
+        instruments = await asyncio.wait_for(
+            db.get_instruments(request.format_type),
+            timeout=5.0  # 5 second timeout for database query
+        )
+        if instruments and len(instruments) > 0:
+            return {
+                "success": True,
+                "data": {
+                    "instruments": instruments,
+                    "count": len(instruments),
+                    "format": request.format_type,
+                    "source": "database"
+                }
             }
-        }
+    except asyncio.TimeoutError:
+        print(f"Database query timeout for instruments, falling back to CSV API")
+    except Exception as e:
+        print(f"Database error for instruments: {e}, falling back to CSV API")
 
-    # Fallback to CSV API if not in database
+    # Fallback to CSV API if not in database or database query fails
     result = trading_service.get_instrument_list_csv(request.format_type)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
@@ -1112,36 +1145,108 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
     try:
         # Receive subscription request
         data = await websocket.receive_json()
-        instruments = data.get("instruments", [])
-        version = data.get("version", "v1")  # Default to v1 as per MarketFeed API
 
-        # Validate instruments format
-        if not instruments:
+        # Support both formats:
+        # 1. New format (per DhanHQ docs): {RequestCode, InstrumentCount, InstrumentList: [{ExchangeSegment, SecurityId}]}
+        # 2. Legacy format: {instruments: [[exchange_code, security_id, feed_code]], version}
+
+        # Feed Request Codes (per DhanHQ Annexure):
+        # 15 = Subscribe - Ticker Packet
+        # 17 = Subscribe - Quote Packet
+        # 21 = Subscribe - Full Packet
+        request_code = data.get("RequestCode", 17)  # Default to 17 (Quote Packet subscription)
+        instrument_list = data.get("InstrumentList", [])
+        instruments = data.get("instruments", [])
+        version = data.get("version", "v2")  # Default to v2 as per DhanHQ WebSocket API
+
+        # Convert to standard format
+        instrument_tuples = []
+
+        # Handle new format: InstrumentList with ExchangeSegment and SecurityId
+        if instrument_list:
+            # Map ExchangeSegment to exchange code (per DhanHQ Annexure)
+            # IDX_I = Index (enum 0) - for indices like NIFTY, SENSEX
+            exchange_map = {
+                "IDX_I": 0,  # Index segment (for indices)
+                "NSE_EQ": 1, "NSE_FNO": 1, "NSE_CUR": 1, "NSE_COM": 1,
+                "BSE_EQ": 2, "BSE_FNO": 2, "BSE_CUR": 2, "BSE_COM": 2,
+                "MCX_COM": 3, "NCDEX_COM": 4
+            }
+
+            # Map RequestCode (WebSocket API) to feed_request_code (MarketFeed SDK)
+            # WebSocket RequestCode → MarketFeed SDK feed_request_code:
+            # 15 = Subscribe - Ticker Packet → feed_code 1
+            # 17 = Subscribe - Quote Packet → feed_code 2
+            # 21 = Subscribe - Full Packet → feed_code 3
+            # Note: MarketFeed SDK uses feed_request_code (1,2,3) not RequestCode (15,17,21)
+            feed_code_map = {
+                15: 1,  # Ticker Packet
+                17: 2,  # Quote Packet
+                21: 3,  # Full Packet
+            }
+            feed_code = feed_code_map.get(request_code, 2)  # Default to Quote Packet (feed_code 2)
+
+            for inst in instrument_list:
+                exchange_segment = inst.get("ExchangeSegment", "")
+                security_id_str = inst.get("SecurityId", "")
+
+                if not exchange_segment or not security_id_str:
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": f"Invalid instrument format: {inst}. Expected {{ExchangeSegment, SecurityId}}"
+                    }, websocket)
+                    return
+
+                # Get exchange code from segment
+                # Direct lookup first (most efficient)
+                exchange_code = exchange_map.get(exchange_segment)
+
+                if exchange_code is None:
+                    # Try to extract from segment name for fallback
+                    if exchange_segment == "IDX_I":
+                        exchange_code = 0  # Index segment (enum 0 per Annexure)
+                    elif "NSE" in exchange_segment:
+                        exchange_code = 1
+                    elif "BSE" in exchange_segment:
+                        exchange_code = 2
+                    elif "MCX" in exchange_segment:
+                        exchange_code = 3
+                    elif "NCDEX" in exchange_segment:
+                        exchange_code = 4
+                    else:
+                        exchange_code = 1  # Default to NSE
+
+                security_id = int(security_id_str)
+                instrument_tuples.append((exchange_code, security_id, feed_code))
+
+        # Handle legacy format: instruments array
+        elif instruments:
+            for inst in instruments:
+                if isinstance(inst, (list, tuple)) and len(inst) >= 2:
+                    exchange_code = int(inst[0])
+                    security_id = int(inst[1]) if isinstance(inst[1], (int, str)) else int(str(inst[1]))
+                    feed_code = int(inst[2]) if len(inst) >= 3 else 2  # Default to Quote mode
+                    instrument_tuples.append((exchange_code, security_id, feed_code))
+                elif isinstance(inst, dict):
+                    # Support dict format too
+                    exchange_segment = inst.get("ExchangeSegment", inst.get("exchangeSegment", ""))
+                    security_id_str = inst.get("SecurityId", inst.get("securityId", ""))
+                    if exchange_segment and security_id_str:
+                        # Map exchange segment to code
+                        exchange_map = {
+                            "NSE_EQ": 1, "NSE_FNO": 1, "BSE_EQ": 2, "BSE_FNO": 2, "MCX_COM": 3
+                        }
+                        exchange_code = exchange_map.get(exchange_segment, 1)
+                        security_id = int(security_id_str)
+                        feed_code = inst.get("feedCode", inst.get("FeedCode", 2))
+                        instrument_tuples.append((exchange_code, security_id, feed_code))
+
+        if not instrument_tuples:
             await manager.send_personal_message({
                 "type": "error",
-                "message": "No instruments provided for subscription"
+                "message": "No valid instruments provided for subscription"
             }, websocket)
             return
-
-        # Convert instruments to tuples if needed
-        # Expected format: [(exchange_code, security_id, feed_request_code), ...]
-        # exchange_code: 1=NSE, 2=BSE
-        # security_id: Security ID (must be int)
-        # feed_request_code: 1=Ticker, 2=Quote, 3=Full, 4=Market Depth, 5=OI, 6=Previous Day
-        instrument_tuples = []
-        for inst in instruments:
-            if isinstance(inst, (list, tuple)) and len(inst) >= 2:
-                # Ensure we have 3 elements (exchange_code, security_id, feed_request_code)
-                exchange_code = int(inst[0])
-                security_id = int(inst[1]) if isinstance(inst[1], (int, str)) else int(str(inst[1]))
-                feed_code = int(inst[2]) if len(inst) >= 3 else 2  # Default to Quote mode
-                instrument_tuples.append((exchange_code, security_id, feed_code))
-            else:
-                await manager.send_personal_message({
-                    "type": "error",
-                    "message": f"Invalid instrument format: {inst}. Expected [exchange_code, security_id, feed_request_code]"
-                }, websocket)
-                return
 
         print(f"Subscribing to {len(instrument_tuples)} instruments: {instrument_tuples}")
 
@@ -1206,24 +1311,70 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
                         # If it's a dict with nested data, extract it
                         if isinstance(response, dict):
                             # Check for common MarketFeed response structures
+                            # MarketFeed may return data nested by exchange segment:
+                            # { "IDX_I": { "13": {...}, "51": {...} } }
+                            # or { "data": { "IDX_I": { "13": {...} } } }
                             if 'data' in response:
-                                processed_data = response['data']
+                                data_content = response['data']
+                                # Check if data is nested by exchange segment (like IDX_I)
+                                if isinstance(data_content, dict) and 'IDX_I' in data_content:
+                                    # Flatten IDX_I data - convert to list of instruments
+                                    idx_data = data_content['IDX_I']
+                                    if isinstance(idx_data, dict):
+                                        processed_data = [
+                                            {**value, 'security_id': str(key), 'securityId': str(key)}
+                                            for key, value in idx_data.items()
+                                        ]
+                                    else:
+                                        processed_data = data_content
+                                else:
+                                    processed_data = data_content
                             elif 'instruments' in response:
                                 processed_data = response['instruments']
                             elif 'quote' in response:
                                 processed_data = response['quote']
                             elif 'ticker' in response:
                                 processed_data = response['ticker']
+                            elif 'IDX_I' in response:
+                                # Direct IDX_I key - flatten it
+                                idx_data = response['IDX_I']
+                                if isinstance(idx_data, dict):
+                                    processed_data = [
+                                        {**value, 'security_id': str(key), 'securityId': str(key)}
+                                        for key, value in idx_data.items()
+                                    ]
+                                else:
+                                    processed_data = response
+                            else:
+                                processed_data = response
 
                         # Ensure security_id is a string for consistent matching
+                        # MarketFeed returns data in various formats - normalize all possible structures
+                        def normalize_security_id(data):
+                            """Recursively normalize security_id fields to strings"""
+                            if isinstance(data, dict):
+                                # Normalize security_id field in dict
+                                for key in ['security_id', 'securityId', 'SECURITY_ID', 'SecurityId', 'Security_ID', 'id']:
+                                    if key in data:
+                                        data[key] = str(data[key])
+                                # Recursively process nested dicts
+                                for value in data.values():
+                                    if isinstance(value, (dict, list)):
+                                        normalize_security_id(value)
+                            elif isinstance(data, list):
+                                # Process each item in list
+                                for item in data:
+                                    normalize_security_id(item)
+
+                        normalize_security_id(processed_data)
+
+                        # Debug logging for index instruments
                         if isinstance(processed_data, dict):
-                            # Normalize security_id field
-                            if 'security_id' in processed_data:
-                                processed_data['security_id'] = str(processed_data['security_id'])
-                            if 'securityId' in processed_data:
-                                processed_data['securityId'] = str(processed_data['securityId'])
-                            if 'SECURITY_ID' in processed_data:
-                                processed_data['SECURITY_ID'] = str(processed_data['SECURITY_ID'])
+                            security_id_val = (processed_data.get('security_id') or
+                                              processed_data.get('securityId') or
+                                              processed_data.get('SECURITY_ID'))
+                            if security_id_val in ['13', '51', 13, 51]:
+                                print(f"Index instrument data received: security_id={security_id_val}, data={processed_data}")
 
                         # Process and send data to client
                         await manager.send_personal_message({
@@ -1262,9 +1413,15 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
         manager.disconnect(websocket)
         if market_feed and access_token in manager.market_feeds:
             try:
-                # Disconnect the market feed
+                # Disconnect the market feed (disconnect is async, close_connection is sync)
                 if hasattr(market_feed, 'disconnect'):
-                    market_feed.disconnect()
+                    try:
+                        await market_feed.disconnect()
+                    except Exception as disconnect_err:
+                        print(f"Error awaiting disconnect: {disconnect_err}")
+                        # Fallback to close_connection if disconnect fails
+                        if hasattr(market_feed, 'close_connection'):
+                            market_feed.close_connection()
                 elif hasattr(market_feed, 'close_connection'):
                     market_feed.close_connection()
             except Exception as e:

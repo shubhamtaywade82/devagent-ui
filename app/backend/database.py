@@ -167,6 +167,12 @@ class Database:
                 upsert=True
             )
 
+            # Ensure index exists after saving (in case it wasn't created on init)
+            try:
+                await self.ensure_indexes()
+            except Exception as e:
+                print(f"Warning: Could not ensure indexes after save: {e}")
+
             return {
                 "success": True,
                 "count": len(instruments),
@@ -175,21 +181,28 @@ class Database:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def ensure_indexes(self):
+        """Create indexes for better query performance"""
+        try:
+            # Create index on 'format' field for faster queries
+            await self.instruments.create_index("format", background=True)
+            print("Created index on 'format' field for instruments collection")
+        except Exception as e:
+            print(f"Error creating indexes: {e}")
+
     async def get_instruments(self, format_type: str = "detailed", limit: Optional[int] = None) -> List[Dict]:
-        """Get instruments from database"""
+        """Get instruments from database - optimized with index"""
         try:
             query = {"format": format_type}
-            cursor = self.instruments.find(query)
+            # Use projection to exclude _id, format, and updated_at to reduce data transfer
+            projection = {"_id": 0, "format": 0, "updated_at": 0}
+            cursor = self.instruments.find(query, projection)
 
             if limit:
                 cursor = cursor.limit(limit)
 
             instruments = []
             async for inst in cursor:
-                # Remove MongoDB _id and format field
-                inst.pop("_id", None)
-                inst.pop("format", None)
-                inst.pop("updated_at", None)
                 instruments.append(inst)
 
             return instruments

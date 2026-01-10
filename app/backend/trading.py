@@ -214,18 +214,78 @@ class TradingService:
     def get_historical_data(self, access_token: str, security_id: int,
                            exchange_segment: str, instrument_type: str,
                            from_date: str, to_date: str, interval: str = "daily") -> Dict[str, Any]:
-        """Get historical data"""
-        try:
-            dhan = self.get_dhan_instance(access_token)
+        """
+        Get historical data (daily or intraday minute data)
 
-            if interval == "daily":
+        Per official example: Uses DhanContext, string security_id, and dhan exchange constants
+
+        Args:
+            access_token: DhanHQ access token
+            security_id: Security ID (will be converted to string per official example)
+            exchange_segment: Exchange segment string (e.g., "NSE_EQ", "BSE_EQ") or constant
+            instrument_type: Instrument type (e.g., "EQUITY", "FUTURES", "OPTIONS")
+            from_date: Start date in "YYYY-MM-DD" format
+            to_date: End date in "YYYY-MM-DD" format
+            interval: "daily" for daily data, "intraday" or "minute" for intraday minute data
+
+        Returns:
+            Dict with success status and data or error message
+        """
+        try:
+            # Import DhanContext if available (per official example pattern)
+            try:
+                from dhanhq import DhanContext
+                use_dhan_context = True
+            except ImportError:
+                use_dhan_context = False
+
+            # Get dhan instance
+            if use_dhan_context:
+                dhan_context = DhanContext(self.client_id, access_token)
+                from dhanhq import dhanhq
+                dhan = dhanhq(dhan_context)
+            else:
+                dhan = self.get_dhan_instance(access_token)
+
+            # Convert security_id to string (per official example: "1333" not 1333)
+            security_id_str = str(security_id)
+
+            # Map exchange segment string to dhan constant if possible
+            # Official example uses: dhan.NSE, dhan.BSE, etc.
+            exchange_constant = None
+            if hasattr(dhan, 'NSE') and exchange_segment.upper().startswith('NSE'):
+                exchange_constant = dhan.NSE
+            elif hasattr(dhan, 'BSE') and exchange_segment.upper().startswith('BSE'):
+                exchange_constant = dhan.BSE
+            elif hasattr(dhan, 'MCX') and exchange_segment.upper().startswith('MCX'):
+                exchange_constant = dhan.MCX
+            elif hasattr(dhan, 'NCDEX') and exchange_segment.upper().startswith('NCDEX'):
+                exchange_constant = dhan.NCDEX
+
+            # Use constant if available, otherwise use original string
+            exchange_seg = exchange_constant if exchange_constant is not None else exchange_segment
+
+            # Fetch data based on interval type
+            if interval.lower() in ["daily", "day"]:
+                # Daily historical data (per official example)
                 data = dhan.historical_daily_data(
-                    security_id, exchange_segment, instrument_type, from_date, to_date
+                    security_id=security_id_str,
+                    exchange_segment=exchange_seg,
+                    instrument_type=instrument_type,
+                    from_date=from_date,
+                    to_date=to_date
                 )
             else:
+                # Intraday minute data (per official example)
+                # Supports: "intraday", "minute", "intraday_minute"
                 data = dhan.intraday_minute_data(
-                    security_id, exchange_segment, instrument_type, from_date, to_date
+                    security_id=security_id_str,
+                    exchange_segment=exchange_seg,
+                    instrument_type=instrument_type,
+                    from_date=from_date,
+                    to_date=to_date
                 )
+
             return {"success": True, "data": data}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -323,35 +383,43 @@ class TradingService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_market_feed(self, access_token: str, instruments: List[tuple], version: str = "v1"):
+    def create_market_feed(self, access_token: str, instruments: List[tuple], version: str = "v2"):
         """
         Create Market Feed instance for real-time data
 
         Args:
             access_token: DhanHQ access token
             instruments: List of tuples in format [(exchange_code, security_id, feed_request_code), ...]
-                       exchange_code: 1=NSE, 2=BSE, etc.
-                       security_id: Security ID
+                       exchange_code: 1=NSE, 2=BSE, etc. (numeric codes are supported)
+                       security_id: Security ID (will be converted to string per official example)
                        feed_request_code: 1=Ticker, 2=Quote, 3=Full, 4=Market Depth, 5=OI, 6=Previous Day
-            version: API version ('v1' or 'v2', default 'v1')
+            version: API version ('v1' or 'v2', default 'v2' per official recommendation)
 
         Returns:
-            MarketFeed instance
+            DhanFeed instance (MarketFeed class from dhanhq library)
         """
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            # Try different import paths for MarketFeed
-            try:
-                from dhanhq.marketfeed import MarketFeed
-            except ImportError:
-                # Alternative import path
-                from dhanhq import marketfeed
-                MarketFeed = marketfeed.MarketFeed
+            # Import DhanFeed (actual class name in dhanhq library)
+            from dhanhq.marketfeed import DhanFeed
 
-            # MarketFeed requires dhan_context as tuple (client_id, access_token)
-            dhan_context = (self.client_id, access_token)
-            return MarketFeed(dhan_context, instruments, version)
+            # Convert security IDs to strings (per official example pattern)
+            # The example shows: (DhanFeed.NSE, "1333", DhanFeed.Ticker)
+            converted_instruments = []
+            for inst in instruments:
+                if len(inst) >= 3:
+                    exchange_code, security_id, feed_code = inst[0], inst[1], inst[2]
+                    # Convert security_id to string to match official example
+                    security_id_str = str(security_id) if not isinstance(security_id, str) else security_id
+                    converted_instruments.append((exchange_code, security_id_str, feed_code))
+                else:
+                    # Keep as-is if format is different
+                    converted_instruments.append(inst)
+
+            # DhanFeed.__init__ signature: (self, client_id, access_token, instruments, version='v1')
+            # Pass client_id and access_token as separate arguments, not as tuple or DhanContext
+            return DhanFeed(self.client_id, access_token, converted_instruments, version)
         except (ImportError, AttributeError) as e:
             raise ImportError(f"Market Feed not available: {str(e)}")
 

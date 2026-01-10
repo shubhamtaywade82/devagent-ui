@@ -218,6 +218,7 @@ function MarketData({ accessToken }) {
               <RealTimeMarketFeed
                 accessToken={accessToken}
                 securityId={parseInt(selectedInstrument.securityId)}
+                exchangeSegment={selectedInstrument.exchangeSegment || "NSE_EQ"}
               />
             )}
           </>

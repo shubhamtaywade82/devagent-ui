@@ -35,13 +35,17 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
     ws.connect();
     wsRef.current = ws;
 
-    // Send subscription request after connection
+    // Send subscription request after connection using DhanHQ documented format
     setTimeout(() => {
       if (ws.ws && ws.ws.readyState === WebSocket.OPEN) {
         ws.send({
-          instruments: [
-            [1, securityId.toString(), 1], // NSE, security_id, Ticker mode
-            [1, securityId.toString(), 2], // NSE, security_id, Quote mode
+          RequestCode: 17, // 17 = Subscribe - Quote Packet (per DhanHQ Annexure)
+          InstrumentCount: 1,
+          InstrumentList: [
+            {
+              ExchangeSegment: exchangeSegment,
+              SecurityId: securityId.toString(),
+            },
           ],
           version: "v2",
         });

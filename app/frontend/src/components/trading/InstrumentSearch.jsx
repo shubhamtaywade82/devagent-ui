@@ -26,6 +26,7 @@ function InstrumentSearch({
       setLoading(false);
       return;
     }
+    // Always load instruments (segmentwise API doesn't require auth)
     loadInstruments();
   }, [accessToken, exchangeSegment]);
 
@@ -121,17 +122,26 @@ function InstrumentSearch({
       if (exchangeSegment) {
         // Use specified segment
         try {
+          console.log(`Loading instruments for segment: ${exchangeSegment}`);
           response = await api.getInstrumentListSegmentwise(exchangeSegment);
-          if (!response.success) {
+          if (!response || !response.success) {
+            console.log("Segmentwise API failed, trying CSV fallback");
             response = await api.getInstrumentListCSV("detailed");
           }
         } catch (err) {
-          response = await api.getInstrumentListCSV("detailed");
+          console.warn("Segmentwise API error, using CSV:", err);
+          try {
+            response = await api.getInstrumentListCSV("detailed");
+          } catch (csvErr) {
+            console.error("CSV API also failed:", csvErr);
+            throw csvErr;
+          }
         }
       } else {
         // Default: Load NSE_EQ (most common, fastest)
         // Optionally load BSE_EQ in parallel for better coverage
         try {
+          console.log("Loading instruments from NSE_EQ and BSE_EQ");
           const [nseResponse, bseResponse] = await Promise.allSettled([
             api.getInstrumentListSegmentwise("NSE_EQ"),
             api.getInstrumentListSegmentwise("BSE_EQ"),
@@ -139,24 +149,30 @@ function InstrumentSearch({
 
           let loadedInstruments = [];
 
-          if (nseResponse.status === "fulfilled" && nseResponse.value.success) {
+          if (nseResponse.status === "fulfilled" && nseResponse.value && nseResponse.value.success) {
             const nseList =
               nseResponse.value.data?.instruments ||
               nseResponse.value.data?.data ||
               [];
             if (Array.isArray(nseList)) {
               loadedInstruments = [...loadedInstruments, ...nseList];
+              console.log(`Loaded ${nseList.length} instruments from NSE_EQ`);
             }
+          } else {
+            console.warn("NSE_EQ API failed:", nseResponse.reason || nseResponse.value);
           }
 
-          if (bseResponse.status === "fulfilled" && bseResponse.value.success) {
+          if (bseResponse.status === "fulfilled" && bseResponse.value && bseResponse.value.success) {
             const bseList =
               bseResponse.value.data?.instruments ||
               bseResponse.value.data?.data ||
               [];
             if (Array.isArray(bseList)) {
               loadedInstruments = [...loadedInstruments, ...bseList];
+              console.log(`Loaded ${bseList.length} instruments from BSE_EQ`);
             }
+          } else {
+            console.warn("BSE_EQ API failed:", bseResponse.reason || bseResponse.value);
           }
 
           if (loadedInstruments.length > 0) {
@@ -168,19 +184,25 @@ function InstrumentSearch({
               },
             };
             console.log(
-              `Loaded ${loadedInstruments.length} instruments from segmentwise API (NSE_EQ + BSE_EQ)`
+              `Successfully loaded ${loadedInstruments.length} instruments from segmentwise API (NSE_EQ + BSE_EQ)`
             );
           } else {
             // Fallback to CSV if both fail
+            console.log("No instruments from segmentwise API, trying CSV fallback");
             response = await api.getInstrumentListCSV("detailed");
           }
         } catch (err) {
           console.warn("Segmentwise API error, using CSV:", err);
-          response = await api.getInstrumentListCSV("detailed");
+          try {
+            response = await api.getInstrumentListCSV("detailed");
+          } catch (csvErr) {
+            console.error("CSV API also failed:", csvErr);
+            throw csvErr;
+          }
         }
       }
 
-      if (response.success) {
+      if (response && response.success) {
         // Handle both CSV format (array of objects) and segmentwise format
         const instList =
           response.data?.instruments || response.data?.data || [];
@@ -193,17 +215,25 @@ function InstrumentSearch({
           finalList = Object.values(instList);
         }
 
-        setInstruments(finalList);
-        // Cache instruments if no specific exchangeSegment (for reuse)
-        if (!exchangeSegment) {
-          instrumentsCacheRef.current = finalList;
+        if (finalList.length === 0) {
+          console.warn("No instruments found in response:", response);
+          setError("No instruments found. Please try syncing instruments first.");
+        } else {
+          setInstruments(finalList);
+          // Cache instruments if no specific exchangeSegment (for reuse)
+          if (!exchangeSegment) {
+            instrumentsCacheRef.current = finalList;
+          }
+          console.log(`Successfully loaded ${finalList.length} instruments`);
         }
-        console.log(`Loaded ${finalList.length} instruments`);
       } else {
-        setError(response.error || "Failed to load instruments");
+        const errorMsg = response?.error || "Failed to load instruments";
+        console.error("API returned error:", errorMsg);
+        setError(errorMsg);
       }
     } catch (err) {
-      setError(err.message || "Failed to load instruments");
+      const errorMsg = err.message || err.toString() || "Failed to load instruments";
+      setError(errorMsg);
       console.error("Error loading instruments:", err);
     } finally {
       setLoading(false);
