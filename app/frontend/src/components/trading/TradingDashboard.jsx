@@ -29,14 +29,14 @@ function TradingDashboard({ accessToken }) {
 
       if (fundsData.success) setFunds(fundsData.data)
       if (positionsData.success) {
-        const positionsArray = Array.isArray(positionsData.data) 
-          ? positionsData.data 
+        const positionsArray = Array.isArray(positionsData.data)
+          ? positionsData.data
           : (positionsData.data?.data || positionsData.data?.positions || [])
         setPositions(positionsArray)
       }
       if (ordersData.success) {
-        const ordersArray = Array.isArray(ordersData.data) 
-          ? ordersData.data 
+        const ordersArray = Array.isArray(ordersData.data)
+          ? ordersData.data
           : (ordersData.data?.data || ordersData.data?.orders || [])
         setOrders(ordersArray)
       }
@@ -63,8 +63,12 @@ function TradingDashboard({ accessToken }) {
     )
   }
 
-  const totalPnL = positions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0)
-  const activeOrders = orders.filter(o => o.orderStatus !== 'COMPLETE' && o.orderStatus !== 'CANCELLED').length
+  const totalPnL = Array.isArray(positions)
+    ? positions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0)
+    : 0
+  const activeOrders = Array.isArray(orders)
+    ? orders.filter(o => o.orderStatus !== 'COMPLETE' && o.orderStatus !== 'CANCELLED').length
+    : 0
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-zinc-950">
@@ -119,7 +123,7 @@ function TradingDashboard({ accessToken }) {
       {/* Positions */}
       <div className="glass rounded-lg p-6 mb-6">
         <h2 className="text-lg font-semibold mb-4">Open Positions</h2>
-        {positions.length === 0 ? (
+        {!Array.isArray(positions) || positions.length === 0 ? (
           <div className="text-center text-zinc-500 py-8">No open positions</div>
         ) : (
           <div className="overflow-x-auto">
@@ -156,7 +160,7 @@ function TradingDashboard({ accessToken }) {
       {/* Recent Orders */}
       <div className="glass rounded-lg p-6">
         <h2 className="text-lg font-semibold mb-4">Recent Orders</h2>
-        {orders.length === 0 ? (
+        {!Array.isArray(orders) || orders.length === 0 ? (
           <div className="text-center text-zinc-500 py-8">No orders yet</div>
         ) : (
           <div className="overflow-x-auto">
