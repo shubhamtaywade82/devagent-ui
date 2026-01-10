@@ -360,8 +360,16 @@ class TradingService:
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            from dhanhq.orderupdate import OrderSocket
-            return OrderSocket((self.client_id, access_token))
+            # Try different import paths for OrderSocket
+            try:
+                from dhanhq.orderupdate import OrderSocket
+            except ImportError:
+                # Alternative import path
+                from dhanhq import orderupdate
+                OrderSocket = orderupdate.OrderSocket
+
+            # OrderSocket expects client_id and access_token as separate arguments, not a tuple
+            return OrderSocket(self.client_id, access_token)
         except (ImportError, AttributeError) as e:
             raise ImportError(f"Order Updates not available: {str(e)}")
 
