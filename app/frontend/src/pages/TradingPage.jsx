@@ -6,6 +6,8 @@ import {
   BarChart3,
   ShoppingCart,
   LogIn,
+  MessageSquare,
+  X,
 } from "lucide-react";
 import TradingDashboard from "../components/trading/TradingDashboard";
 import OrderPlacement from "../components/trading/OrderPlacement";
@@ -13,6 +15,7 @@ import PortfolioView from "../components/trading/PortfolioView";
 import MarketData from "../components/trading/MarketData";
 import TradingAuth from "../components/trading/TradingAuth";
 import LiveOrderUpdates from "../components/trading/LiveOrderUpdates";
+import TradingChat from "../components/trading/TradingChat";
 import IndexIndicators from "../components/trading/IndexIndicators";
 import api from "../services/api";
 
@@ -21,6 +24,7 @@ function TradingPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [accessToken, setAccessToken] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
+  const [showChat, setShowChat] = useState(false);
 
   useEffect(() => {
     // Check if access token exists in localStorage
@@ -88,12 +92,26 @@ function TradingPage() {
             </div>
           )}
         </div>
-        <button
-          onClick={handleLogout}
-          className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors ml-4"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowChat(!showChat)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              showChat
+                ? "bg-green-600 hover:bg-green-500 text-white"
+                : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
+            }`}
+            title="Toggle AI Trading Assistant"
+          >
+            <MessageSquare className="w-4 h-4 inline mr-2" />
+            {showChat ? "Hide Chat" : "AI Assistant"}
+          </button>
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors"
+          >
+            Logout
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -167,11 +185,27 @@ function TradingPage() {
           {activeTab === "market" && <MarketData accessToken={accessToken} />}
         </div>
 
-        {/* Live Order Updates Sidebar */}
+        {/* Sidebars */}
         {isAuthenticated && (
-          <div className="w-80 border-l border-zinc-800 overflow-y-auto">
-            <LiveOrderUpdates accessToken={accessToken} />
-          </div>
+          <>
+            {/* Live Order Updates Sidebar */}
+            <div className="w-80 border-l border-zinc-800 overflow-hidden flex flex-col">
+              <LiveOrderUpdates accessToken={accessToken} />
+            </div>
+
+            {/* Trading Chat Sidebar - Collapsible */}
+            {showChat && (
+              <motion.div
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: 400, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                className="border-l border-zinc-800 overflow-hidden flex flex-col"
+                style={{ width: showChat ? "400px" : "0" }}
+              >
+                <TradingChat accessToken={accessToken} />
+              </motion.div>
+            )}
+          </>
         )}
       </div>
     </div>

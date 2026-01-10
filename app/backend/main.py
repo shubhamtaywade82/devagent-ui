@@ -14,6 +14,160 @@ from datetime import datetime, timedelta
 from database import Database
 from models import Project, File, ChatMessage
 from trading import trading_service
+from tools import DHANHQ_TOOLS
+from tool_executor import execute_tool
+
+
+def format_market_quote_result(data):
+    """Format market quote data for LLM understanding"""
+    if not data:
+        return "No market data available"
+
+    formatted = []
+
+    # DhanHQ returns nested structure: data.data.data.{exchange_segment}.{security_id}
+    # Navigate through the nested structure
+    quote_data = None
+
+    if isinstance(data, dict):
+        # Try to find the actual quote data in nested structure
+        if "data" in data and isinstance(data["data"], dict):
+            if "data" in data["data"] and isinstance(data["data"]["data"], dict):
+                # This is the nested structure: data.data.data.{exchange_segment}
+                nested = data["data"]["data"]
+                # Iterate through exchange segments (NSE_IDX, NSE_EQ, etc.)
+                for exchange_seg, securities in nested.items():
+                    if isinstance(securities, dict):
+                        # Iterate through security IDs
+                        for security_id, quote_info in securities.items():
+                            if isinstance(quote_info, dict):
+                                quote_data = quote_info
+                                break
+                        if quote_data:
+                            break
+        else:
+            # Try direct access - might be flat structure
+            quote_data = data
+
+    # Extract quote information with multiple field name variations
+    if quote_data and isinstance(quote_data, dict):
+        # Try various field name formats from DhanHQ API
+        symbol = (quote_data.get("symbol") or quote_data.get("SYMBOL") or
+                 quote_data.get("tradingSymbol") or quote_data.get("TRADING_SYMBOL") or
+                 quote_data.get("name") or quote_data.get("NAME") or "NIFTY 50")
+
+        ltp = (quote_data.get("LTP") or quote_data.get("ltp") or
+              quote_data.get("lastPrice") or quote_data.get("LAST_PRICE") or
+              quote_data.get("last_traded_price") or "N/A")
+
+        open_price = (quote_data.get("OPEN") or quote_data.get("open") or
+                     quote_data.get("openPrice") or quote_data.get("OPEN_PRICE") or
+                     quote_data.get("open_price") or "N/A")
+
+        high = (quote_data.get("HIGH") or quote_data.get("high") or
+               quote_data.get("highPrice") or quote_data.get("HIGH_PRICE") or
+               quote_data.get("high_price") or "N/A")
+
+        low = (quote_data.get("LOW") or quote_data.get("low") or
+              quote_data.get("lowPrice") or quote_data.get("LOW_PRICE") or
+              quote_data.get("low_price") or "N/A")
+
+        close = (quote_data.get("CLOSE") or quote_data.get("close") or
+                quote_data.get("closePrice") or quote_data.get("CLOSE_PRICE") or
+                quote_data.get("previousClose") or quote_data.get("PREV_CLOSE") or
+                quote_data.get("prev_close") or "N/A")
+
+        volume = (quote_data.get("VOLUME") or quote_data.get("volume") or
+                 quote_data.get("totalVolume") or quote_data.get("TOTAL_VOLUME") or
+                 quote_data.get("total_volume") or "N/A")
+
+        # Format the output
+        formatted.append(f"""
+Symbol: {symbol}
+Current Price (LTP): ₹{ltp}
+Open: ₹{open_price}
+High: ₹{high}
+Low: ₹{low}
+Previous Close: ₹{close}
+Volume: {volume}
+""")
+
+    # If we couldn't find the data, return the raw structure for debugging
+    if not formatted:
+        # Try to extract any numeric values that might be prices
+        if isinstance(data, dict):
+            # Look for any numeric fields that might be prices
+            for key, value in data.items():
+                if isinstance(value, (int, float)) and value > 0:
+                    formatted.append(f"{key}: {value}")
+
+        if not formatted:
+            # Last resort: return formatted JSON
+            return f"Market data received but format not recognized. Raw data:\n{json.dumps(data, indent=2)}"
+
+    return "\n".join(formatted) if formatted else "No market data available"
+
+
+def format_positions_result(data):
+    """Format positions data for LLM understanding"""
+    if not data or not isinstance(data, list):
+        return "No positions data available"
+
+    if len(data) == 0:
+        return "No open positions"
+
+    formatted = ["Current Open Positions:\n"]
+    total_pnl = 0
+
+    for pos in data:
+        symbol = pos.get("symbol") or pos.get("tradingSymbol", "Unknown")
+        quantity = pos.get("quantity") or pos.get("qty", 0)
+        avg_price = pos.get("averagePrice") or pos.get("avgPrice", 0)
+        ltp = pos.get("ltp") or pos.get("lastPrice", 0)
+        pnl = pos.get("pnl") or pos.get("profitLoss", 0)
+        total_pnl += float(pnl) if pnl else 0
+
+        formatted.append(f"""
+- {symbol}
+  Quantity: {quantity}
+  Average Price: ₹{avg_price}
+  Current Price: ₹{ltp}
+  P&L: ₹{pnl}
+""")
+
+    formatted.append(f"\nTotal P&L: ₹{total_pnl:.2f}")
+    return "\n".join(formatted)
+
+
+def format_holdings_result(data):
+    """Format holdings data for LLM understanding"""
+    if not data or not isinstance(data, list):
+        return "No holdings data available"
+
+    if len(data) == 0:
+        return "No holdings"
+
+    formatted = ["Current Holdings:\n"]
+    total_value = 0
+
+    for holding in data:
+        symbol = holding.get("symbol") or holding.get("tradingSymbol", "Unknown")
+        quantity = holding.get("quantity") or holding.get("qty", 0)
+        avg_price = holding.get("averagePrice") or holding.get("avgPrice", 0)
+        ltp = holding.get("ltp") or holding.get("lastPrice", 0)
+        value = float(ltp) * float(quantity) if ltp and quantity else 0
+        total_value += value
+
+        formatted.append(f"""
+- {symbol}
+  Quantity: {quantity}
+  Average Price: ₹{avg_price}
+  Current Price: ₹{ltp}
+  Current Value: ₹{value:.2f}
+""")
+
+    formatted.append(f"\nTotal Portfolio Value: ₹{total_value:.2f}")
+    return "\n".join(formatted)
 
 load_dotenv()
 
@@ -130,6 +284,7 @@ class ChatRequest(BaseModel):
     project_id: Optional[str] = None
     context: Optional[List[str]] = []
     task: Optional[str] = None  # e.g., "options" for options analysis with X-Task header
+    access_token: Optional[str] = None  # DhanHQ access token for trading operations
 
 
 class ComponentGenerateRequest(BaseModel):
@@ -442,26 +597,131 @@ async def generate_ollama_router_response(prompt: str, task: Optional[str] = Non
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def generate_openai_response(prompt: str):
-    """Generate non-streaming response from OpenAI-compatible API"""
+async def generate_openai_response(prompt: str, tools=None, messages=None, access_token=None):
+    """Generate non-streaming response from OpenAI-compatible API with optional tool calling"""
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OPENAI_API_BASE}/chat/completions"
+
+            # Build messages list
+            if messages is None:
+                messages = [{"role": "user", "content": prompt}]
+
             payload = {
                 "model": OPENAI_API_MODEL,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
+                "messages": messages,
                 "stream": False
             }
+
+            # Add tools if provided
+            if tools:
+                payload["tools"] = tools
+                # For trading requests, force tool usage if the query is about prices/positions
+                if access_token and any(keyword in (messages[-1].get("content", "") or "").lower()
+                                      for keyword in ["price", "quote", "position", "holding", "p&l", "portfolio", "nifty", "hdfc", "reliance"]):
+                    # Force tool usage for price/position queries
+                    payload["tool_choice"] = "required"
+                else:
+                    payload["tool_choice"] = "auto"  # Let model decide when to use tools
 
             response = await client.post(url, json=payload)
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail=response.text)
             data = response.json()
+
             # Extract content from OpenAI format
             if "choices" in data and len(data["choices"]) > 0:
-                return {"response": data["choices"][0]["message"]["content"]}
+                message = data["choices"][0]["message"]
+
+                # Check if model wants to call a function
+                if "tool_calls" in message and message["tool_calls"]:
+                    # Execute function calls
+                    tool_results = []
+                    for tool_call in message["tool_calls"]:
+                        function_name = tool_call["function"]["name"]
+                        try:
+                            function_args = json.loads(tool_call["function"]["arguments"])
+                        except json.JSONDecodeError:
+                            function_args = {}
+
+                        # Execute the tool
+                        result = await execute_tool(function_name, function_args, access_token)
+
+                        # Format result for better LLM understanding
+                        if isinstance(result, dict):
+                            if result.get("success"):
+                                # Format successful result
+                                data = result.get("data", {})
+                                if function_name == "get_market_quote":
+                                    # Format market quote data nicely
+                                    formatted_result = format_market_quote_result(data)
+                                elif function_name == "get_positions":
+                                    formatted_result = format_positions_result(data)
+                                elif function_name == "get_holdings":
+                                    formatted_result = format_holdings_result(data)
+                                else:
+                                    formatted_result = json.dumps(data, indent=2)
+                                content = f"Tool executed successfully. Result:\n{formatted_result}"
+                            else:
+                                # Format error
+                                error_msg = result.get("error", "Unknown error")
+                                content = f"Tool execution failed: {error_msg}"
+                        else:
+                            content = json.dumps(result, indent=2)
+
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "name": function_name,
+                            "content": content
+                        })
+
+                    # Add assistant message with tool calls and tool results
+                    messages.append(message)
+                    messages.extend(tool_results)
+
+                    # Get final response with tool results
+                    payload["messages"] = messages
+                    # Remove tool_choice for final response
+                    if "tool_choice" in payload:
+                        del payload["tool_choice"]
+                    response = await client.post(url, json=payload)
+                    if response.status_code != 200:
+                        raise HTTPException(status_code=response.status_code, detail=response.text)
+                    data = response.json()
+                    if "choices" in data and len(data["choices"]) > 0:
+                        return {"response": data["choices"][0]["message"]["content"]}
+
+                # If no tool calls but tools were available and this is a trading query,
+                # the model might have ignored tools - try fallback extraction
+                content = message.get("content", "")
+                if tools and access_token:
+                    # Check if model showed code instead of calling tools
+                    import re
+
+                    # Try to extract get_market_quote call
+                    match = re.search(r'get_market_quote\s*\(\s*({[^}]+})\s*\)', content, re.IGNORECASE)
+                    if match:
+                        try:
+                            # Extract and execute
+                            args_str = match.group(1).replace("'", '"')
+                            args = json.loads(args_str)
+                            result = await execute_tool("get_market_quote", {"securities": args}, access_token)
+                            if result.get("success"):
+                                formatted = format_market_quote_result(result.get("data", {}))
+                                return {"response": f"I've fetched the current market data:\n\n{formatted}\n\nLet me know if you need any analysis of this data."}
+                        except Exception as e:
+                            print(f"Fallback execution failed: {e}")
+
+                    # Try to detect if user asked about NIFTY specifically
+                    if "nifty" in content.lower() or "nifty" in (messages[-1].get("content", "") or "").lower():
+                        # Directly call get_market_quote for NIFTY
+                        result = await execute_tool("get_market_quote", {"securities": {"NSE_IDX": [99926000]}}, access_token)
+                        if result.get("success"):
+                            formatted = format_market_quote_result(result.get("data", {}))
+                            return {"response": f"Here's the current NIFTY 50 data:\n\n{formatted}"}
+
+                return {"response": content}
             return {"response": ""}
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail=f"OpenAI-compatible API is not reachable at {OPENAI_API_BASE}")
@@ -564,15 +824,44 @@ Provide a helpful, concise response with code examples when relevant."""
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """Streaming chat endpoint"""
+    """Streaming chat endpoint with optional trading support"""
     try:
+        # Determine if this is a trading request
+        is_trading_request = request.access_token is not None or request.task == "trading"
+
         # Build context-aware prompt
         context_parts = []
         if request.context:
             context_parts.append("Context from project files:")
             context_parts.extend(request.context[:3])
 
-        prompt = f"""You are an AI coding assistant. Help the user with their coding questions.
+        if is_trading_request:
+            # Trading assistant prompt
+            prompt = f"""You are an AI trading assistant with access to real-time market data and trading APIs via DhanHQ.
+
+You can help users with:
+- Market analysis and price quotes
+- Portfolio positions and P&L analysis
+- Trading strategies and insights
+- Options chain analysis
+- Historical data analysis
+- Risk management advice
+
+Common Security IDs:
+- NIFTY 50: 99926000 (NSE_IDX)
+- NIFTY Bank: 99926009 (NSE_IDX)
+- HDFC Bank: 1333 (NSE_EQ)
+- Reliance: 11536 (NSE_EQ)
+- TCS: 11536 (NSE_EQ)
+
+{f"Context: {' '.join(context_parts)}" if context_parts else ""}
+
+User question: {request.message}
+
+IMPORTANT: You have access to DhanHQ trading APIs through function calling. When users ask about prices, positions, or market data, you MUST use the available tools to fetch real-time information. Do NOT generate code examples - use the actual function calling tools."""
+        else:
+            # Coding assistant prompt
+            prompt = f"""You are an AI coding assistant. Help the user with their coding questions.
 
 {f"Context: {' '.join(context_parts)}" if context_parts else ""}
 
@@ -593,7 +882,10 @@ Provide a helpful, concise response with code examples when relevant."""
                         yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
                     yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
                 except Exception as e:
-                    error_msg = f"⚠️ Error: {str(e)}"
+                    error_detail = str(e) if str(e) else repr(e)
+                    if not error_detail:
+                        error_detail = "Ollama Router error occurred. Please check if Ollama Router is running and configured correctly."
+                    error_msg = f"⚠️ Error: {error_detail}"
                     yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
 
             return StreamingResponse(
@@ -601,11 +893,49 @@ Provide a helpful, concise response with code examples when relevant."""
                 media_type="text/event-stream"
             )
         elif USE_OPENAI_API and OPENAI_API_BASE:
-            # OpenAI-compatible APIs often have issues with streaming (router errors)
+            # OpenAI-compatible APIs with optional tool calling support
             # Use non-streaming and send as a single chunk for better reliability
             async def non_streaming_wrapper():
                 try:
-                    response = await generate_openai_response(prompt)
+                    # Use tools if this is a trading request with access token
+                    tools_to_use = None
+                    if is_trading_request and request.access_token:
+                        tools_to_use = DHANHQ_TOOLS
+
+                    # Build messages with system prompt
+                    messages_list = []
+                    if is_trading_request:
+                        messages_list.append({
+                            "role": "system",
+                            "content": """You are a trading assistant with access to real-time market data via DhanHQ APIs through function calling tools.
+
+CRITICAL INSTRUCTIONS:
+1. When users ask about stock prices, positions, market data, or portfolio information, you MUST use the available tools to fetch real data
+2. DO NOT generate Python code or pseudo-code - use the actual function calling tools
+3. DO NOT ask users for more details - use the tools with the information you have
+4. For stock names like "HDFC Bank", use security ID 1333 with exchange_segment "NSE_EQ"
+5. For indices like "NIFTY", use security ID 99926000 with exchange_segment "NSE_IDX"
+6. Always call the appropriate tool first, then provide analysis based on the actual data returned
+
+Available tools:
+- get_market_quote: Get current prices (use this for price queries)
+- get_positions: Get user's open positions
+- get_holdings: Get user's holdings
+- get_fund_limits: Get balance and margin
+- get_historical_data: Get price history for analysis
+- get_option_chain: Get options data
+- analyze_market: Comprehensive market analysis
+
+Example: If user asks "What's the price of HDFC Bank?", immediately call get_market_quote with {"NSE_EQ": [1333]} and provide the actual price from the response."""
+                        })
+                    messages_list.append({"role": "user", "content": request.message})
+
+                    response = await generate_openai_response(
+                        prompt=None,  # Not used when messages are provided
+                        tools=tools_to_use,
+                        messages=messages_list,
+                        access_token=request.access_token if is_trading_request else None
+                    )
                     content = response.get("response", "")
                     # Send content in chunks to simulate streaming
                     chunk_size = 10
@@ -614,7 +944,10 @@ Provide a helpful, concise response with code examples when relevant."""
                         yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
                     yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
                 except Exception as e:
-                    error_msg = f"⚠️ Error: {str(e)}"
+                    error_detail = str(e) if str(e) else repr(e)
+                    if not error_detail:
+                        error_detail = "OpenAI-compatible API error occurred. Please check if the API is running and configured correctly."
+                    error_msg = f"⚠️ Error: {error_detail}"
                     yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
 
             return StreamingResponse(
@@ -626,10 +959,28 @@ Provide a helpful, concise response with code examples when relevant."""
                 generate_ollama_response_stream(prompt),
                 media_type="text/event-stream"
             )
-    except HTTPException:
-        raise
+    except HTTPException as e:
+        # Return HTTP exception as streaming error
+        async def error_wrapper():
+            error_detail = e.detail if e.detail else "HTTP error occurred"
+            error_msg = f"⚠️ Error: {error_detail}"
+            yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+        return StreamingResponse(
+            error_wrapper(),
+            media_type="text/event-stream"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return general exception as streaming error
+        async def error_wrapper():
+            error_detail = str(e) if str(e) else repr(e)
+            if not error_detail:
+                error_detail = "Unknown error occurred. Please check if Ollama is running or if the API is configured correctly."
+            error_msg = f"⚠️ Error: {error_detail}"
+            yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+        return StreamingResponse(
+            error_wrapper(),
+            media_type="text/event-stream"
+        )
 
 
 @app.post("/api/generate/component")
