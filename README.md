@@ -28,8 +28,10 @@ A web-based development editor inspired by Cursor AI, featuring AI-powered code 
 ## Getting Started
 
 ### Prerequisites
-- Ollama installed and running on `localhost:11434`
-- Llama 3.2 model downloaded in Ollama: `ollama pull llama3.2`
+- **Ollama** (default): Installed and running on `localhost:11434` with Llama 3.2 model: `ollama pull llama3.2`
+- **OR OpenAI-Compatible API**: Any service with `/v1/chat/completions` endpoint (e.g., Open WebUI, vLLM)
+
+  See [AI_PROVIDERS.md](AI_PROVIDERS.md) for detailed configuration.
 
 ### Installation
 
@@ -96,7 +98,11 @@ The application requires Ollama to be running locally at `localhost:11434` with 
 
 ### Environment Variables
 - **Backend**: Uses `MONGO_URL`, `DB_NAME` from `/app/backend/.env`
-- **Frontend**: Uses `REACT_APP_BACKEND_URL` from `/app/frontend/.env`
+  - **AI Provider**: Configure `OLLAMA_BASE_URL`, `OLLAMA_MODEL` for Ollama
+  - **OR**: Configure `OPENAI_API_BASE`, `OPENAI_API_MODEL`, `USE_OPENAI_API=true` for OpenAI-compatible APIs
+- **Frontend**: Uses `VITE_BACKEND_URL` from `/app/frontend/.env`
+
+See [AI_PROVIDERS.md](AI_PROVIDERS.md) for AI provider configuration details.
 
 ## Architecture
 

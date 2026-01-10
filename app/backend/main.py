@@ -27,9 +27,14 @@ app.add_middleware(
 # Initialize database
 db = Database()
 
-# Ollama configuration
+# AI Provider configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL = "llama3.2"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+# OpenAI-compatible API (e.g., Open WebUI, vLLM, etc.)
+OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", None)  # e.g., "http://localhost:8080/v1"
+OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "nemesis-coder")
+# Use OpenAI-compatible API if configured, otherwise fall back to Ollama
+USE_OPENAI_API = os.getenv("USE_OPENAI_API", "false").lower() == "true"
 
 
 # Request/Response Models
@@ -175,6 +180,81 @@ async def delete_file(file: FileDelete):
 
 
 # AI Chat endpoints
+async def generate_openai_response_stream(prompt: str):
+    """Generate streaming response from OpenAI-compatible API"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            url = f"{OPENAI_API_BASE}/chat/completions"
+            payload = {
+                "model": OPENAI_API_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": True
+            }
+
+            async with client.stream("POST", url, json=payload) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    error_msg = f"⚠️ Error: {error_text.decode()}"
+                    yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+                    return
+
+                async for line in response.aiter_lines():
+                    if line:
+                        if line.strip() == "data: [DONE]":
+                            yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                            break
+                        if line.startswith("data: "):
+                            try:
+                                data = json.loads(line[6:])  # Remove "data: " prefix
+                                if "choices" in data and len(data["choices"]) > 0:
+                                    delta = data["choices"][0].get("delta", {})
+                                    content = delta.get("content", "")
+                                    if content:
+                                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+                                    # Check if finished
+                                    finish_reason = data["choices"][0].get("finish_reason")
+                                    if finish_reason:
+                                        yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                                        break
+                            except json.JSONDecodeError:
+                                continue
+    except httpx.ConnectError:
+        error_msg = f"⚠️ OpenAI-compatible API is not reachable at {OPENAI_API_BASE}"
+        yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+
+
+async def generate_openai_response(prompt: str):
+    """Generate non-streaming response from OpenAI-compatible API"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            url = f"{OPENAI_API_BASE}/chat/completions"
+            payload = {
+                "model": OPENAI_API_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": False
+            }
+
+            response = await client.post(url, json=payload)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+            data = response.json()
+            # Extract content from OpenAI format
+            if "choices" in data and len(data["choices"]) > 0:
+                return {"response": data["choices"][0]["message"]["content"]}
+            return {"response": ""}
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail=f"OpenAI-compatible API is not reachable at {OPENAI_API_BASE}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def generate_ollama_response_stream(prompt: str):
     """Generate streaming response from Ollama"""
     try:
@@ -252,8 +332,12 @@ User question: {request.message}
 
 Provide a helpful, concise response with code examples when relevant."""
 
-        response = await generate_ollama_response(prompt)
-        return {"response": response.get("response", "")}
+        if USE_OPENAI_API and OPENAI_API_BASE:
+            response = await generate_openai_response(prompt)
+            return {"response": response.get("response", "")}
+        else:
+            response = await generate_ollama_response(prompt)
+            return {"response": response.get("response", "")}
     except HTTPException:
         raise
     except Exception as e:
@@ -278,10 +362,16 @@ User question: {request.message}
 
 Provide a helpful, concise response with code examples when relevant."""
 
-        return StreamingResponse(
-            generate_ollama_response_stream(prompt),
-            media_type="text/event-stream"
-        )
+        if USE_OPENAI_API and OPENAI_API_BASE:
+            return StreamingResponse(
+                generate_openai_response_stream(prompt),
+                media_type="text/event-stream"
+            )
+        else:
+            return StreamingResponse(
+                generate_ollama_response_stream(prompt),
+                media_type="text/event-stream"
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -304,8 +394,12 @@ Requirements:
 
 Return ONLY the component code, no explanations."""
 
-        response = await generate_ollama_response(prompt)
-        component_code = response.get("response", "")
+        if USE_OPENAI_API and OPENAI_API_BASE:
+            response = await generate_openai_response(prompt)
+            component_code = response.get("response", "")
+        else:
+            response = await generate_ollama_response(prompt)
+            component_code = response.get("response", "")
 
         return {
             "component": component_code,
@@ -334,8 +428,12 @@ Include:
 
 Return a JSON object with all these properties. Use a dark theme with violet/blue accents as default."""
 
-        response = await generate_ollama_response(prompt)
-        design_system = response.get("response", "")
+        if USE_OPENAI_API and OPENAI_API_BASE:
+            response = await generate_openai_response(prompt)
+            design_system = response.get("response", "")
+        else:
+            response = await generate_ollama_response(prompt)
+            design_system = response.get("response", "")
 
         # Try to extract JSON from response
         try:
