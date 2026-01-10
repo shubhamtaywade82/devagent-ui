@@ -341,7 +341,14 @@ class TradingService:
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            from dhanhq.marketfeed import MarketFeed
+            # Try different import paths for MarketFeed
+            try:
+                from dhanhq.marketfeed import MarketFeed
+            except ImportError:
+                # Alternative import path
+                from dhanhq import marketfeed
+                MarketFeed = marketfeed.MarketFeed
+
             # MarketFeed requires dhan_context as tuple (client_id, access_token)
             dhan_context = (self.client_id, access_token)
             return MarketFeed(dhan_context, instruments, version)
@@ -363,7 +370,13 @@ class TradingService:
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            from dhanhq import FullDepth
+            # Try different import paths for FullDepth
+            try:
+                from dhanhq import FullDepth
+            except ImportError:
+                # Alternative import path
+                from dhanhq.fulldepth import FullDepth
+
             return FullDepth((self.client_id, access_token), instruments)
         except (ImportError, AttributeError) as e:
             raise ImportError(f"Full Depth not available: {str(e)}")
