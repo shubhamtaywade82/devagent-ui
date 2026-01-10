@@ -131,6 +131,35 @@ class HistoricalDataRequest(BaseModel):
     interval: str = "daily"
 
 
+class TradeHistoryRequest(BaseModel):
+    access_token: str
+    from_date: str
+    to_date: str
+    page_number: int = 0
+
+
+class MarginCalculatorRequest(BaseModel):
+    access_token: str
+    security_id: str
+    exchange_segment: str
+    transaction_type: str
+    quantity: int
+    product_type: str
+    price: float = 0
+    trigger_price: float = 0
+
+
+class KillSwitchRequest(BaseModel):
+    token_id: str
+    status: Optional[str] = None  # ACTIVATE or DEACTIVATE, None for get status
+
+
+class LedgerRequest(BaseModel):
+    access_token: str
+    from_date: Optional[str] = None
+    to_date: Optional[str] = None
+
+
 # Health check
 @app.get("/")
 async def root():
@@ -821,6 +850,82 @@ async def get_expiry_list(request: OptionChainRequest):
     )
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get expiry list"))
+    return result
+
+
+@app.post("/api/trading/trades")
+async def get_trades(request: TradingAuthRequest):
+    """Get all trades executed today"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_trades(request.token_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get trades"))
+    return result
+
+
+@app.post("/api/trading/trades/{order_id}")
+async def get_trade_by_order_id(order_id: str, request: TradingAuthRequest):
+    """Get trades by order ID"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    result = trading_service.get_trade_by_order_id(request.token_id, order_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get trade"))
+    return result
+
+
+@app.post("/api/trading/trades/history")
+async def get_trade_history(request: TradeHistoryRequest):
+    """Get trade history for date range"""
+    result = trading_service.get_trade_history(
+        request.access_token,
+        request.from_date,
+        request.to_date,
+        request.page_number
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get trade history"))
+    return result
+
+
+@app.post("/api/trading/margin/calculator")
+async def calculate_margin(request: MarginCalculatorRequest):
+    """Calculate margin for an order"""
+    result = trading_service.calculate_margin(request.access_token, request.dict())
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to calculate margin"))
+    return result
+
+
+@app.post("/api/trading/killswitch")
+async def manage_kill_switch(request: KillSwitchRequest):
+    """Get or manage kill switch status"""
+    if not request.token_id:
+        raise HTTPException(status_code=400, detail="Access token is required")
+
+    if request.status:
+        # Manage kill switch
+        result = trading_service.manage_kill_switch(request.token_id, request.status)
+    else:
+        # Get status
+        result = trading_service.get_kill_switch_status(request.token_id)
+
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to manage kill switch"))
+    return result
+
+
+@app.post("/api/trading/ledger")
+async def get_ledger(request: LedgerRequest):
+    """Get ledger report"""
+    result = trading_service.get_ledger(
+        request.access_token,
+        request.from_date,
+        request.to_date
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get ledger"))
     return result
 
 

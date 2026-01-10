@@ -247,6 +247,77 @@ class TradingService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    def get_trades(self, access_token: str) -> Dict[str, Any]:
+        """Get all trades executed today"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            trades = dhan.get_trade_book()
+            return {"success": True, "data": trades}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_trade_by_order_id(self, access_token: str, order_id: str) -> Dict[str, Any]:
+        """Get trades by order ID"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            trades = dhan.get_trade_by_order_id(order_id)
+            return {"success": True, "data": trades}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_trade_history(self, access_token: str, from_date: str, to_date: str, page_number: int = 0) -> Dict[str, Any]:
+        """Get trade history for date range"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            trades = dhan.get_trade_history(from_date, to_date, page_number)
+            return {"success": True, "data": trades}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def calculate_margin(self, access_token: str, margin_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate margin for an order"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            margin = dhan.margin_calculator(
+                security_id=margin_data.get("security_id"),
+                exchange_segment=getattr(dhan, margin_data.get("exchange_segment", "NSE_EQ")),
+                transaction_type=getattr(dhan, margin_data.get("transaction_type", "BUY")),
+                quantity=margin_data.get("quantity", 1),
+                product_type=getattr(dhan, margin_data.get("product_type", "INTRADAY")),
+                price=margin_data.get("price", 0),
+                trigger_price=margin_data.get("trigger_price", 0)
+            )
+            return {"success": True, "data": margin}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_kill_switch_status(self, access_token: str) -> Dict[str, Any]:
+        """Get kill switch status"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            status = dhan.kill_switch()
+            return {"success": True, "data": status}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def manage_kill_switch(self, access_token: str, status: str) -> Dict[str, Any]:
+        """Manage kill switch (ACTIVATE or DEACTIVATE)"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            result = dhan.kill_switch(status)
+            return {"success": True, "data": result}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def get_ledger(self, access_token: str, from_date: Optional[str] = None, to_date: Optional[str] = None) -> Dict[str, Any]:
+        """Get ledger report"""
+        try:
+            dhan = self.get_dhan_instance(access_token)
+            ledger = dhan.ledger_report(from_date, to_date)
+            return {"success": True, "data": ledger}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
 # Global trading service instance
 trading_service = TradingService()
 
