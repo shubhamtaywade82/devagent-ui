@@ -63,12 +63,29 @@ function TradingDashboard({ accessToken }) {
     )
   }
 
+  // Helper function to safely extract fund values with fallbacks
+  const getFundValue = (funds, ...keys) => {
+    if (!funds) return 0
+    for (const key of keys) {
+      const value = funds[key]
+      if (value !== undefined && value !== null) {
+        return typeof value === 'number' ? value : parseFloat(value) || 0
+      }
+    }
+    return 0
+  }
+
   const totalPnL = Array.isArray(positions)
-    ? positions.reduce((sum, pos) => sum + (pos.unrealizedPnL || 0), 0)
+    ? positions.reduce((sum, pos) => sum + (pos.unrealizedPnL || pos.unrealisedPnL || pos.pnl || 0), 0)
     : 0
   const activeOrders = Array.isArray(orders)
     ? orders.filter(o => o.orderStatus !== 'COMPLETE' && o.orderStatus !== 'CANCELLED').length
     : 0
+
+  const availableBalance = getFundValue(funds, 'availableBalance', 'availableFunds', 'availableMargin', 'available')
+  const marginUsed = getFundValue(funds, 'marginUsed', 'marginUtilized', 'usedMargin', 'margin')
+  const totalBalance = getFundValue(funds, 'totalBalance', 'totalFunds', 'totalMargin', 'balance')
+  const collateral = getFundValue(funds, 'collateral', 'collateralValue', 'collateralAmount')
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-zinc-950">
@@ -80,7 +97,7 @@ function TradingDashboard({ accessToken }) {
             <Wallet className="w-5 h-5 text-green-500" />
           </div>
           <div className="text-2xl font-bold text-white">
-            ₹{funds?.availableBalance?.toLocaleString('en-IN') || '0.00'}
+            ₹{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
         </div>
 
@@ -106,7 +123,7 @@ function TradingDashboard({ accessToken }) {
             <DollarSign className="w-5 h-5 text-blue-500" />
           </div>
           <div className="text-2xl font-bold text-white">
-            ₹{funds?.marginUsed?.toLocaleString('en-IN') || '0.00'}
+            ₹{marginUsed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
         </div>
 

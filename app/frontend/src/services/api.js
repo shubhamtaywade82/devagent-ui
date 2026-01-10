@@ -195,4 +195,9 @@ export default {
     });
     return response.data;
   },
+
+  async calculateMargin(data) {
+    const response = await api.post("/api/trading/margin/calculator", data);
+    return response.data;
+  },
 };

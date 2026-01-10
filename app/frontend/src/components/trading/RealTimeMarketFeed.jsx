@@ -1,39 +1,39 @@
-import { useState, useEffect, useRef } from 'react'
-import { Activity, Wifi, WifiOff } from 'lucide-react'
-import TradingWebSocket from '../../services/websocket'
+import { useState, useEffect, useRef } from "react";
+import { Activity, Wifi, WifiOff } from "lucide-react";
+import TradingWebSocket from "../../services/websocket";
 
 function RealTimeMarketFeed({ accessToken, securityId }) {
-  const [feedData, setFeedData] = useState(null)
-  const [isConnected, setIsConnected] = useState(false)
-  const [error, setError] = useState('')
-  const wsRef = useRef(null)
+  const [feedData, setFeedData] = useState(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState("");
+  const wsRef = useRef(null);
 
   useEffect(() => {
-    if (!accessToken || !securityId) return
+    if (!accessToken || !securityId) return;
 
     // Create WebSocket connection
     const ws = new TradingWebSocket(
-      '/ws/trading/market-feed/{access_token}',
+      "/ws/trading/market-feed/{access_token}",
       accessToken,
       (data) => {
-        if (data.type === 'market_feed') {
-          setFeedData(data.data)
-          setError('')
-        } else if (data.type === 'error') {
-          setError(data.message)
+        if (data.type === "market_feed") {
+          setFeedData(data.data);
+          setError("");
+        } else if (data.type === "error") {
+          setError(data.message);
         }
       },
       (err) => {
-        setError('WebSocket connection error')
-        setIsConnected(false)
+        setError("WebSocket connection error");
+        setIsConnected(false);
       },
       () => {
-        setIsConnected(false)
+        setIsConnected(false);
       }
-    )
+    );
 
-    ws.connect()
-    wsRef.current = ws
+    ws.connect();
+    wsRef.current = ws;
 
     // Send subscription request after connection
     setTimeout(() => {
@@ -43,18 +43,18 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
             [1, securityId.toString(), 1], // NSE, security_id, Ticker mode
             [1, securityId.toString(), 2], // NSE, security_id, Quote mode
           ],
-          version: 'v2'
-        })
-        setIsConnected(true)
+          version: "v2",
+        });
+        setIsConnected(true);
       }
-    }, 1000)
+    }, 1000);
 
     return () => {
       if (wsRef.current) {
-        wsRef.current.disconnect()
+        wsRef.current.disconnect();
       }
-    }
-  }, [accessToken, securityId])
+    };
+  }, [accessToken, securityId]);
 
   return (
     <div className="glass rounded-lg p-6">
@@ -87,13 +87,20 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
             <div className="bg-zinc-900 rounded-lg p-4">
               <div className="text-sm text-zinc-400 mb-1">Last Price</div>
               <div className="text-2xl font-bold text-green-500">
-                ₹{feedData.lastPrice?.toFixed(2) || '0.00'}
+                ₹{feedData.lastPrice?.toFixed(2) || "0.00"}
               </div>
             </div>
             <div className="bg-zinc-900 rounded-lg p-4">
               <div className="text-sm text-zinc-400 mb-1">Change</div>
-              <div className={`text-2xl font-bold ${(feedData.change || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {feedData.change >= 0 ? '+' : ''}{feedData.change?.toFixed(2) || '0.00'}
+              <div
+                className={`text-2xl font-bold ${
+                  (feedData.change || 0) >= 0
+                    ? "text-green-500"
+                    : "text-red-500"
+                }`}
+              >
+                {feedData.change >= 0 ? "+" : ""}
+                {feedData.change?.toFixed(2) || "0.00"}
               </div>
             </div>
           </div>
@@ -110,8 +117,7 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
         </div>
       )}
     </div>
-  )
+  );
 }
 
-export default RealTimeMarketFeed
-
+export default RealTimeMarketFeed;

@@ -1,64 +1,64 @@
-import { useState, useEffect, useRef } from 'react'
-import { Bell, Wifi, WifiOff, CheckCircle, XCircle, Clock } from 'lucide-react'
-import TradingWebSocket from '../../services/websocket'
+import { useState, useEffect, useRef } from "react";
+import { Bell, Wifi, WifiOff, CheckCircle, XCircle, Clock } from "lucide-react";
+import TradingWebSocket from "../../services/websocket";
 
 function LiveOrderUpdates({ accessToken }) {
-  const [orderUpdates, setOrderUpdates] = useState([])
-  const [isConnected, setIsConnected] = useState(false)
-  const [error, setError] = useState('')
-  const wsRef = useRef(null)
+  const [orderUpdates, setOrderUpdates] = useState([]);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState("");
+  const wsRef = useRef(null);
 
   useEffect(() => {
-    if (!accessToken) return
+    if (!accessToken) return;
 
     const ws = new TradingWebSocket(
-      '/ws/trading/order-updates/{access_token}',
+      "/ws/trading/order-updates/{access_token}",
       accessToken,
       (data) => {
-        if (data.type === 'order_update') {
-          setOrderUpdates(prev => [data.data, ...prev].slice(0, 20)) // Keep last 20 updates
-          setError('')
-        } else if (data.type === 'error') {
-          setError(data.message)
+        if (data.type === "order_update") {
+          setOrderUpdates((prev) => [data.data, ...prev].slice(0, 20)); // Keep last 20 updates
+          setError("");
+        } else if (data.type === "error") {
+          setError(data.message);
         }
       },
       (err) => {
-        setError('WebSocket connection error')
-        setIsConnected(false)
+        setError("WebSocket connection error");
+        setIsConnected(false);
       },
       () => {
-        setIsConnected(false)
+        setIsConnected(false);
       }
-    )
+    );
 
-    ws.connect()
-    wsRef.current = ws
+    ws.connect();
+    wsRef.current = ws;
 
     setTimeout(() => {
       if (ws.ws && ws.ws.readyState === WebSocket.OPEN) {
-        setIsConnected(true)
+        setIsConnected(true);
       }
-    }, 1000)
+    }, 1000);
 
     return () => {
       if (wsRef.current) {
-        wsRef.current.disconnect()
+        wsRef.current.disconnect();
       }
-    }
-  }, [accessToken])
+    };
+  }, [accessToken]);
 
   const getStatusIcon = (status) => {
     switch (status) {
-      case 'TRADED':
-      case 'COMPLETE':
-        return <CheckCircle className="w-4 h-4 text-green-500" />
-      case 'REJECTED':
-      case 'CANCELLED':
-        return <XCircle className="w-4 h-4 text-red-500" />
+      case "TRADED":
+      case "COMPLETE":
+        return <CheckCircle className="w-4 h-4 text-green-500" />;
+      case "REJECTED":
+      case "CANCELLED":
+        return <XCircle className="w-4 h-4 text-red-500" />;
       default:
-        return <Clock className="w-4 h-4 text-yellow-500" />
+        return <Clock className="w-4 h-4 text-yellow-500" />;
     }
-  }
+  };
 
   return (
     <div className="glass rounded-lg p-6">
@@ -95,7 +95,10 @@ function LiveOrderUpdates({ accessToken }) {
           </div>
         ) : (
           orderUpdates.map((update, idx) => (
-            <div key={idx} className="bg-zinc-900 rounded-lg p-3 flex items-center justify-between">
+            <div
+              key={idx}
+              className="bg-zinc-900 rounded-lg p-3 flex items-center justify-between"
+            >
               <div className="flex items-center gap-3">
                 {getStatusIcon(update.orderStatus || update.status)}
                 <div>
@@ -103,7 +106,8 @@ function LiveOrderUpdates({ accessToken }) {
                     Order ID: {update.orderId || update.order_id}
                   </div>
                   <div className="text-xs text-zinc-400">
-                    {update.tradingSymbol || update.symbol} • {update.orderStatus || update.status}
+                    {update.tradingSymbol || update.symbol} •{" "}
+                    {update.orderStatus || update.status}
                   </div>
                 </div>
               </div>
@@ -112,7 +116,7 @@ function LiveOrderUpdates({ accessToken }) {
                   Qty: {update.quantity || update.qty}
                 </div>
                 <div className="text-xs text-zinc-400">
-                  ₹{update.price?.toFixed(2) || '0.00'}
+                  ₹{update.price?.toFixed(2) || "0.00"}
                 </div>
               </div>
             </div>
@@ -120,8 +124,7 @@ function LiveOrderUpdates({ accessToken }) {
         )}
       </div>
     </div>
-  )
+  );
 }
 
-export default LiveOrderUpdates
-
+export default LiveOrderUpdates;
