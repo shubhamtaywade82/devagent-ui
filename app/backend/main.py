@@ -62,6 +62,7 @@ class ChatRequest(BaseModel):
     message: str
     project_id: Optional[str] = None
     context: Optional[List[str]] = []
+    task: Optional[str] = None  # e.g., "options" for options analysis with X-Task header
 
 
 class ComponentGenerateRequest(BaseModel):
@@ -248,6 +249,39 @@ async def generate_openai_response_stream(prompt: str):
         yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
 
 
+async def generate_ollama_router_response(prompt: str, task: Optional[str] = None, model: Optional[str] = None):
+    """Generate non-streaming response from Ollama Router native endpoint"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            url = f"{OLLAMA_ROUTER_BASE}/api/chat"
+            payload = {
+                "model": model or OPENAI_API_MODEL,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": False
+            }
+
+            headers = {}
+            if task:
+                headers["X-Task"] = task
+
+            response = await client.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+            data = response.json()
+            # Ollama Router native format
+            if "message" in data:
+                return {"response": data["message"]["content"]}
+            elif "response" in data:
+                return {"response": data["response"]}
+            return {"response": ""}
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail=f"Ollama Router is not reachable at {OLLAMA_ROUTER_BASE}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def generate_openai_response(prompt: str):
     """Generate non-streaming response from OpenAI-compatible API"""
     try:
@@ -352,7 +386,11 @@ User question: {request.message}
 
 Provide a helpful, concise response with code examples when relevant."""
 
-        if USE_OPENAI_API and OPENAI_API_BASE:
+        if USE_OLLAMA_ROUTER and OLLAMA_ROUTER_BASE:
+            # Use Ollama Router native endpoint with X-Task header support
+            response = await generate_ollama_router_response(prompt, task=request.task)
+            return {"response": response.get("response", "")}
+        elif USE_OPENAI_API and OPENAI_API_BASE:
             response = await generate_openai_response(prompt)
             return {"response": response.get("response", "")}
         else:
@@ -382,7 +420,27 @@ User question: {request.message}
 
 Provide a helpful, concise response with code examples when relevant."""
 
-        if USE_OPENAI_API and OPENAI_API_BASE:
+        if USE_OLLAMA_ROUTER and OLLAMA_ROUTER_BASE:
+            # Ollama Router native endpoint - use non-streaming and simulate streaming
+            async def ollama_router_wrapper():
+                try:
+                    response = await generate_ollama_router_response(prompt, task=request.task)
+                    content = response.get("response", "")
+                    # Send content in chunks to simulate streaming
+                    chunk_size = 10
+                    for i in range(0, len(content), chunk_size):
+                        chunk = content[i:i + chunk_size]
+                        yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
+                    yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                except Exception as e:
+                    error_msg = f"⚠️ Error: {str(e)}"
+                    yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+
+            return StreamingResponse(
+                ollama_router_wrapper(),
+                media_type="text/event-stream"
+            )
+        elif USE_OPENAI_API and OPENAI_API_BASE:
             # OpenAI-compatible APIs often have issues with streaming (router errors)
             # Use non-streaming and send as a single chunk for better reliability
             async def non_streaming_wrapper():

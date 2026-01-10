@@ -27,6 +27,7 @@ Supports any OpenAI-compatible API endpoint, including:
 - vLLM
 - LocalAI
 - Text Generation Inference (TGI)
+- Ollama Router (OpenAI-compatible mode)
 - Any service with OpenAI-compatible `/v1/chat/completions` endpoint
 
 **Configuration:**
@@ -35,6 +36,25 @@ OPENAI_API_BASE=http://localhost:8080/v1
 OPENAI_API_MODEL=nemesis-coder
 USE_OPENAI_API=true
 ```
+
+### 3. Ollama Router Native API
+
+Supports Ollama Router's native `/api/chat` endpoint with advanced features:
+- `X-Task` header support for specialized tasks (e.g., "options" for options analysis)
+- Auto-routing based on content
+- Better integration with router-specific features
+
+**Configuration:**
+```env
+OLLAMA_ROUTER_BASE=http://localhost:8080
+OPENAI_API_MODEL=nemesis-coder  # Model to use
+USE_OLLAMA_ROUTER=true
+```
+
+**Usage with X-Task header:**
+When using Ollama Router, you can pass a `task` parameter in chat requests:
+- `task: "options"` - For options analysis with nemesis-options-analyst model
+- Auto-routing - Router can auto-detect tasks from content
 
 **Example with Open WebUI:**
 ```env
@@ -63,6 +83,11 @@ Add these to `/app/backend/.env`:
 - `OPENAI_API_MODEL` - Model name to use (e.g., `nemesis-coder`)
 - `USE_OPENAI_API` - Set to `true` to use OpenAI-compatible API, `false` for Ollama (default: `false`)
 
+### Ollama Router Native API Configuration
+- `OLLAMA_ROUTER_BASE` - Base URL for Ollama Router (e.g., `http://localhost:8080`)
+- `OPENAI_API_MODEL` - Model name to use (e.g., `nemesis-coder` or `nemesis-options-analyst`)
+- `USE_OLLAMA_ROUTER` - Set to `true` to use Ollama Router native endpoint (default: `false`)
+
 ## Switching Providers
 
 1. **To use Ollama (default):**
@@ -76,6 +101,13 @@ Add these to `/app/backend/.env`:
    ```env
    USE_OPENAI_API=true
    OPENAI_API_BASE=http://localhost:8080/v1
+   OPENAI_API_MODEL=nemesis-coder
+   ```
+
+3. **To use Ollama Router native endpoint (recommended for router features):**
+   ```env
+   USE_OLLAMA_ROUTER=true
+   OLLAMA_ROUTER_BASE=http://localhost:8080
    OPENAI_API_MODEL=nemesis-coder
    ```
 
