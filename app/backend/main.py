@@ -607,6 +607,28 @@ Return a JSON object with all these properties. Use a dark theme with violet/blu
 
 
 # Trading endpoints
+@app.post("/api/trading/auth/token")
+async def trading_auth_token(request: TradingAuthRequest):
+    """Authenticate with access token directly"""
+    if not request.token_id:  # Using token_id field for access_token
+        raise HTTPException(status_code=400, detail="Access token is required")
+
+    # Validate token by getting user profile
+    result = trading_service.get_user_profile(request.token_id)
+    if not result.get("success"):
+        error_detail = result.get("error", "Invalid access token")
+        # Log the error for debugging
+        import logging
+        logging.error(f"Token validation failed: {error_detail}")
+        raise HTTPException(status_code=401, detail=error_detail)
+
+    return {
+        "success": True,
+        "access_token": request.token_id,
+        "data": result.get("data")
+    }
+
+
 @app.post("/api/trading/auth/pin")
 async def trading_auth_pin(request: TradingAuthRequest):
     """Authenticate with PIN and TOTP"""

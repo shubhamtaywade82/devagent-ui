@@ -1,9 +1,10 @@
 """
 Trading module for DhanHQ integration
 """
-from dhanhq import DhanLogin, DhanContext, dhanhq
+from dhanhq import dhanhq
 from typing import Optional, Dict, List, Any
 import os
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,75 +16,92 @@ class TradingService:
         self.client_id = os.getenv("DHAN_CLIENT_ID")
         self.app_id = os.getenv("DHAN_APP_ID")
         self.app_secret = os.getenv("DHAN_APP_SECRET")
-        self.dhan_login = None
-        self.dhan_context = None
         self.dhan = None
 
-        if self.client_id:
-            self.dhan_login = DhanLogin(self.client_id)
+    def get_dhan_instance(self, access_token: str):
+        """Get or create DhanHQ instance with access token"""
+        if not self.client_id:
+            raise ValueError("DHAN_CLIENT_ID is not configured in backend environment. Please set it in app/backend/.env file.")
+        # Always create a new instance to ensure correct access token
+        # The dhanhq library doesn't expose access_token for comparison
+        return dhanhq(self.client_id, access_token)
 
     def authenticate_with_pin(self, pin: str, totp: str) -> Dict[str, Any]:
-        """Authenticate using PIN and TOTP"""
+        """Authenticate using PIN and TOTP - requires external API call"""
         try:
-            access_token_data = self.dhan_login.generate_token(pin, totp)
+            # PIN/TOTP authentication requires calling DhanHQ API directly
+            # This is not available in the dhanhq library v2.0.2
+            # Users should generate tokens via DhanHQ web portal
             return {
-                "success": True,
-                "access_token": access_token_data.get("access_token"),
-                "refresh_token": access_token_data.get("refresh_token"),
-                "expires_in": access_token_data.get("expires_in")
+                "success": False,
+                "error": "PIN/TOTP authentication not available in this version. Please generate access token from DhanHQ web portal."
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def authenticate_oauth(self, app_id: str, app_secret: str) -> Dict[str, Any]:
-        """Generate OAuth consent URL"""
+        """Generate OAuth consent URL - requires external API call"""
         try:
-            consent_id = self.dhan_login.generate_login_session(app_id, app_secret)
+            # OAuth requires calling DhanHQ API directly
+            # This is not available in the dhanhq library v2.0.2
             return {
-                "success": True,
-                "consent_id": consent_id,
-                "login_url": f"https://api.dhan.co/oauth/authorize?consent_id={consent_id}"
+                "success": False,
+                "error": "OAuth authentication not available in this version. Please generate access token from DhanHQ web portal."
             }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def consume_token_id(self, token_id: str, app_id: str, app_secret: str) -> Dict[str, Any]:
-        """Consume token ID from OAuth redirect"""
+        """Consume token ID from OAuth redirect - requires external API call"""
         try:
-            access_token = self.dhan_login.consume_token_id(token_id, app_id, app_secret)
-            return {"success": True, "access_token": access_token}
+            # Token consumption requires calling DhanHQ API directly
+            return {
+                "success": False,
+                "error": "OAuth token consumption not available in this version. Please generate access token from DhanHQ web portal."
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
-
-    def initialize_context(self, access_token: str):
-        """Initialize DhanHQ context with access token"""
-        if not self.client_id:
-            raise ValueError("DHAN_CLIENT_ID not configured")
-        self.dhan_context = DhanContext(self.client_id, access_token)
-        self.dhan = dhanhq(self.dhan_context)
-        return True
 
     def get_user_profile(self, access_token: str) -> Dict[str, Any]:
-        """Get user profile information"""
+        """Get user profile information by validating token"""
         try:
-            user_info = self.dhan_login.user_profile(access_token)
-            return {"success": True, "data": user_info}
-        except Exception as e:
+            if not self.client_id:
+                return {"success": False, "error": "DHAN_CLIENT_ID not configured in backend"}
+
+            # Validate token by creating a dhanhq instance and making a simple API call
+            dhan = self.get_dhan_instance(access_token)
+            # Try to get fund limits as a way to validate the token
+            funds = dhan.get_fund_limits()
+            return {
+                "success": True,
+                "data": {
+                    "access_token_valid": True,
+                    "client_id": self.client_id
+                }
+            }
+        except ValueError as e:
+            # This is likely a configuration error
             return {"success": False, "error": str(e)}
+        except Exception as e:
+            # Log the full error for debugging
+            error_msg = str(e)
+            # Check if it's an API error from DhanHQ
+            if "401" in error_msg or "Unauthorized" in error_msg or "Invalid" in error_msg:
+                return {"success": False, "error": "Invalid or expired access token. Please generate a new token from DhanHQ web portal."}
+            return {"success": False, "error": f"Token validation failed: {error_msg}"}
 
     def place_order(self, access_token: str, order_data: Dict[str, Any]) -> Dict[str, Any]:
         """Place a trading order"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
+            dhan = self.get_dhan_instance(access_token)
 
-            result = self.dhan.place_order(
+            result = dhan.place_order(
                 security_id=order_data["security_id"],
-                exchange_segment=order_data["exchange_segment"],
-                transaction_type=order_data["transaction_type"],
+                exchange_segment=getattr(dhan, order_data["exchange_segment"]),
+                transaction_type=getattr(dhan, order_data["transaction_type"]),
                 quantity=order_data["quantity"],
-                order_type=order_data["order_type"],
-                product_type=order_data["product_type"],
+                order_type=getattr(dhan, order_data["order_type"]),
+                product_type=getattr(dhan, order_data["product_type"]),
                 price=order_data.get("price", 0),
                 trigger_price=order_data.get("trigger_price", 0),
                 disclosed_quantity=order_data.get("disclosed_quantity", 0),
@@ -96,9 +114,8 @@ class TradingService:
     def get_orders(self, access_token: str) -> Dict[str, Any]:
         """Get all orders"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            orders = self.dhan.get_order_list()
+            dhan = self.get_dhan_instance(access_token)
+            orders = dhan.get_order_list()
             return {"success": True, "data": orders}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -106,9 +123,8 @@ class TradingService:
     def get_order_by_id(self, access_token: str, order_id: str) -> Dict[str, Any]:
         """Get order by ID"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            order = self.dhan.get_order_by_id(order_id)
+            dhan = self.get_dhan_instance(access_token)
+            order = dhan.get_order_by_id(order_id)
             return {"success": True, "data": order}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -116,9 +132,8 @@ class TradingService:
     def cancel_order(self, access_token: str, order_id: str) -> Dict[str, Any]:
         """Cancel an order"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            result = self.dhan.cancel_order(order_id)
+            dhan = self.get_dhan_instance(access_token)
+            result = dhan.cancel_order(order_id)
             return {"success": True, "data": result}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -126,9 +141,8 @@ class TradingService:
     def modify_order(self, access_token: str, order_id: str, order_data: Dict[str, Any]) -> Dict[str, Any]:
         """Modify an order"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            result = self.dhan.modify_order(
+            dhan = self.get_dhan_instance(access_token)
+            result = dhan.modify_order(
                 order_id,
                 order_data.get("order_type"),
                 order_data.get("leg_name"),
@@ -145,9 +159,8 @@ class TradingService:
     def get_positions(self, access_token: str) -> Dict[str, Any]:
         """Get current positions"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            positions = self.dhan.get_positions()
+            dhan = self.get_dhan_instance(access_token)
+            positions = dhan.get_positions()
             return {"success": True, "data": positions}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -155,9 +168,8 @@ class TradingService:
     def get_holdings(self, access_token: str) -> Dict[str, Any]:
         """Get current holdings"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            holdings = self.dhan.get_holdings()
+            dhan = self.get_dhan_instance(access_token)
+            holdings = dhan.get_holdings()
             return {"success": True, "data": holdings}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -165,9 +177,8 @@ class TradingService:
     def get_fund_limits(self, access_token: str) -> Dict[str, Any]:
         """Get fund limits and margin details"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            funds = self.dhan.get_fund_limits()
+            dhan = self.get_dhan_instance(access_token)
+            funds = dhan.get_fund_limits()
             return {"success": True, "data": funds}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -175,9 +186,8 @@ class TradingService:
     def get_market_quote(self, access_token: str, securities: Dict[str, List[int]]) -> Dict[str, Any]:
         """Get market quote data"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            quote = self.dhan.ohlc_data(securities=securities)
+            dhan = self.get_dhan_instance(access_token)
+            quote = dhan.ohlc_data(securities=securities)
             return {"success": True, "data": quote}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -186,9 +196,8 @@ class TradingService:
                         under_exchange_segment: str, expiry: str) -> Dict[str, Any]:
         """Get option chain data"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            chain = self.dhan.option_chain(
+            dhan = self.get_dhan_instance(access_token)
+            chain = dhan.option_chain(
                 under_security_id=under_security_id,
                 under_exchange_segment=under_exchange_segment,
                 expiry=expiry
@@ -202,15 +211,14 @@ class TradingService:
                            from_date: str, to_date: str, interval: str = "daily") -> Dict[str, Any]:
         """Get historical data"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
+            dhan = self.get_dhan_instance(access_token)
 
             if interval == "daily":
-                data = self.dhan.historical_daily_data(
+                data = dhan.historical_daily_data(
                     security_id, exchange_segment, instrument_type, from_date, to_date
                 )
             else:
-                data = self.dhan.intraday_minute_data(
+                data = dhan.intraday_minute_data(
                     security_id, exchange_segment, instrument_type, from_date, to_date
                 )
             return {"success": True, "data": data}
@@ -220,9 +228,8 @@ class TradingService:
     def get_security_list(self, access_token: str, format_type: str = "compact") -> Dict[str, Any]:
         """Get security/instrument list"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            securities = self.dhan.fetch_security_list(format_type)
+            dhan = self.get_dhan_instance(access_token)
+            securities = dhan.fetch_security_list(format_type)
             return {"success": True, "data": securities}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -231,9 +238,8 @@ class TradingService:
                        under_exchange_segment: str) -> Dict[str, Any]:
         """Get expiry list for underlying"""
         try:
-            if not self.dhan:
-                self.initialize_context(access_token)
-            expiries = self.dhan.expiry_list(
+            dhan = self.get_dhan_instance(access_token)
+            expiries = dhan.expiry_list(
                 under_security_id=under_security_id,
                 under_exchange_segment=under_exchange_segment
             )

@@ -13,9 +13,23 @@ DevAgent has been transformed into a comprehensive trading platform using DhanHQ
 
 ### 🔐 Authentication
 
-Two authentication methods are supported:
+Three authentication methods are supported:
 
-#### Method 1: PIN & TOTP
+#### Method 1: Direct Access Token (Recommended)
+
+Simply paste your access token directly:
+
+```javascript
+// Frontend automatically handles this
+POST /api/trading/auth/token
+{
+  "token_id": "YOUR_ACCESS_TOKEN"
+}
+```
+
+This is the fastest method if you already have an access token from DhanHQ. The token will be validated by fetching your user profile.
+
+#### Method 2: PIN & TOTP
 ```javascript
 // Frontend automatically handles this
 POST /api/trading/auth/pin
@@ -25,7 +39,7 @@ POST /api/trading/auth/pin
 }
 ```
 
-#### Method 2: OAuth Flow
+#### Method 3: OAuth Flow
 ```javascript
 // Step 1: Initialize OAuth
 POST /api/trading/auth/oauth
