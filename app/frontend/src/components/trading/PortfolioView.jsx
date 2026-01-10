@@ -53,9 +53,10 @@ function PortfolioView({ accessToken }) {
     )
   }
 
-  const totalBalance = getFundValue(funds, 'totalBalance', 'totalFunds', 'totalMargin', 'balance')
-  const availableBalance = getFundValue(funds, 'availableBalance', 'availableFunds', 'availableMargin', 'available')
-  const marginUsed = getFundValue(funds, 'marginUsed', 'marginUtilized', 'usedMargin', 'margin')
+  // DhanHQ API returns 'availabelBalance' (note the typo in their API)
+  const totalBalance = getFundValue(funds, 'sodLimit', 'totalBalance', 'totalFunds', 'totalMargin', 'balance', 'totalCash', 'openingBalance')
+  const availableBalance = getFundValue(funds, 'availabelBalance', 'availableBalance', 'availableFunds', 'availableMargin', 'available', 'availableCash', 'cashAvailable', 'withdrawableBalance')
+  const marginUsed = getFundValue(funds, 'utilizedAmount', 'marginUsed', 'marginUtilized', 'usedMargin', 'margin', 'marginUtilised')
 
   return (
     <div className="h-full overflow-y-auto p-6">

@@ -32,10 +32,12 @@ function TradingDashboard({ accessToken }) {
 
       // Handle funds data
       if (fundsData.success) {
-        setFunds(fundsData.data)
+        // DhanHQ API returns data nested under 'data' key
+        const fundsDataValue = fundsData.data?.data || fundsData.data
+        setFunds(fundsDataValue)
         setErrors(prev => ({ ...prev, funds: null }))
         // Log for debugging
-        console.log('Funds data:', fundsData.data)
+        console.log('Funds data:', fundsDataValue)
       } else {
         setErrors(prev => ({ ...prev, funds: fundsData.error || 'Failed to load funds' }))
         console.error('Funds error:', fundsData.error)
@@ -109,10 +111,13 @@ function TradingDashboard({ accessToken }) {
     ? orders.filter(o => o.orderStatus !== 'COMPLETE' && o.orderStatus !== 'CANCELLED').length
     : 0
 
-  const availableBalance = getFundValue(funds, 'availableBalance', 'availableFunds', 'availableMargin', 'available', 'availableCash', 'cashAvailable')
-  const marginUsed = getFundValue(funds, 'marginUsed', 'marginUtilized', 'usedMargin', 'margin', 'marginUtilised')
-  const totalBalance = getFundValue(funds, 'totalBalance', 'totalFunds', 'totalMargin', 'balance', 'totalCash', 'openingBalance')
-  const collateral = getFundValue(funds, 'collateral', 'collateralValue', 'collateralAmount')
+  // DhanHQ API returns 'availabelBalance' (note the typo in their API)
+  const availableBalance = getFundValue(funds, 'availabelBalance', 'availableBalance', 'availableFunds', 'availableMargin', 'available', 'availableCash', 'cashAvailable')
+  const withdrawableBalance = getFundValue(funds, 'withdrawableBalance', 'withdrawable', 'withdrawableAmount')
+  const marginUsed = getFundValue(funds, 'utilizedAmount', 'marginUsed', 'marginUtilized', 'usedMargin', 'margin', 'marginUtilised')
+  const totalBalance = getFundValue(funds, 'sodLimit', 'totalBalance', 'totalFunds', 'totalMargin', 'balance', 'totalCash', 'openingBalance')
+  const collateral = getFundValue(funds, 'collateralAmount', 'collateral', 'collateralValue')
+  const receivableAmount = getFundValue(funds, 'receiveableAmount', 'receivableAmount', 'receivable')
 
   // Check if there are any errors
   const hasErrors = errors.funds || errors.positions || errors.orders
@@ -184,6 +189,11 @@ function TradingDashboard({ accessToken }) {
           <div className="text-2xl font-bold text-white">
             ₹{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
+          {funds && withdrawableBalance > 0 && withdrawableBalance !== availableBalance && (
+            <div className="text-xs text-zinc-500 mt-1">
+              Withdrawable: ₹{withdrawableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          )}
           {!funds && !errors.funds && (
             <div className="text-xs text-zinc-500 mt-1">Loading...</div>
           )}
@@ -208,11 +218,16 @@ function TradingDashboard({ accessToken }) {
         <div className="glass rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-zinc-400">Margin Used</span>
-            <DollarSign className="w-5 h-5 text-blue-500" />
+            <DollarSign className="w-5 h-5 text-orange-500" />
           </div>
           <div className="text-2xl font-bold text-white">
             ₹{marginUsed.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
+          {collateral > 0 && (
+            <div className="text-xs text-zinc-500 mt-1">
+              Collateral: ₹{collateral.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          )}
         </div>
 
         {/* Active Orders */}
