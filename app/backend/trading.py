@@ -323,13 +323,28 @@ class TradingService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def create_market_feed(self, access_token: str, instruments: List[tuple], version: str = "v2"):
-        """Create Market Feed instance for real-time data"""
+    def create_market_feed(self, access_token: str, instruments: List[tuple], version: str = "v1"):
+        """
+        Create Market Feed instance for real-time data
+
+        Args:
+            access_token: DhanHQ access token
+            instruments: List of tuples in format [(exchange_code, security_id, feed_request_code), ...]
+                       exchange_code: 1=NSE, 2=BSE, etc.
+                       security_id: Security ID
+                       feed_request_code: 1=Ticker, 2=Quote, 3=Full, 4=Market Depth, 5=OI, 6=Previous Day
+            version: API version ('v1' or 'v2', default 'v1')
+
+        Returns:
+            MarketFeed instance
+        """
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            from dhanhq.marketfeed import DhanFeed
-            return DhanFeed((self.client_id, access_token), instruments, version)
+            from dhanhq.marketfeed import MarketFeed
+            # MarketFeed requires dhan_context as tuple (client_id, access_token)
+            dhan_context = (self.client_id, access_token)
+            return MarketFeed(dhan_context, instruments, version)
         except (ImportError, AttributeError) as e:
             raise ImportError(f"Market Feed not available: {str(e)}")
 

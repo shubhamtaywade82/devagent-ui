@@ -1095,7 +1095,8 @@ class ConnectionManager:
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         try:
             await websocket.send_json(message)
-        except:
+        except Exception as e:
+            print(f"Error sending message: {e}")
             self.disconnect(websocket)
 
 manager = ConnectionManager()
@@ -1103,22 +1104,81 @@ manager = ConnectionManager()
 
 @app.websocket("/ws/trading/market-feed/{access_token}")
 async def market_feed_websocket(websocket: WebSocket, access_token: str):
-    """WebSocket endpoint for real-time market feed"""
+    """WebSocket endpoint for real-time market feed using DhanHQ MarketFeed"""
     await manager.connect(websocket)
+    market_feed = None
+    feed_thread = None
+
     try:
         # Receive subscription request
         data = await websocket.receive_json()
         instruments = data.get("instruments", [])
-        version = data.get("version", "v2")
+        version = data.get("version", "v1")  # Default to v1 as per MarketFeed API
+
+        # Validate instruments format
+        if not instruments:
+            await manager.send_personal_message({
+                "type": "error",
+                "message": "No instruments provided for subscription"
+            }, websocket)
+            return
+
+        # Convert instruments to tuples if needed
+        # Expected format: [(exchange_code, security_id, feed_request_code), ...]
+        instrument_tuples = []
+        for inst in instruments:
+            if isinstance(inst, (list, tuple)) and len(inst) >= 2:
+                # Ensure we have 3 elements (exchange_code, security_id, feed_request_code)
+                if len(inst) == 2:
+                    # Default to Quote mode (2) if feed_request_code not provided
+                    instrument_tuples.append((inst[0], inst[1], 2))
+                else:
+                    instrument_tuples.append(tuple(inst[:3]))
+            else:
+                await manager.send_personal_message({
+                    "type": "error",
+                    "message": f"Invalid instrument format: {inst}. Expected [exchange_code, security_id, feed_request_code]"
+                }, websocket)
+                return
 
         # Create market feed instance
         try:
-            market_feed = trading_service.create_market_feed(access_token, instruments, version)
+            market_feed = trading_service.create_market_feed(access_token, instrument_tuples, version)
             manager.market_feeds[access_token] = market_feed
 
+            # Send connection success message
+            await manager.send_personal_message({
+                "type": "connected",
+                "message": "Market feed connected successfully",
+                "instruments_count": len(instrument_tuples)
+            }, websocket)
+
+            # Initialize and authorize market feed connection
+            # MarketFeed requires async initialization
+            async def initialize_market_feed():
+                try:
+                    # Authorize the connection (async method)
+                    await market_feed.authorize()
+                    # Connect to WebSocket (async method)
+                    await market_feed.connect()
+                    # Subscribe to instruments (async method)
+                    await market_feed.subscribe_instruments()
+                except Exception as e:
+                    print(f"Market feed initialization error: {e}")
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": f"Failed to initialize market feed: {str(e)}"
+                    }, websocket)
+                    raise
+
+            # Initialize market feed
+            await initialize_market_feed()
+
             # Start market feed in background thread
+            # MarketFeed.run_forever() is a blocking call that runs the event loop
             def run_market_feed():
                 try:
+                    # Run the market feed event loop (blocking)
                     market_feed.run_forever()
                 except Exception as e:
                     print(f"Market feed error: {e}")
@@ -1126,37 +1186,60 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
             feed_thread = threading.Thread(target=run_market_feed, daemon=True)
             feed_thread.start()
 
-            # Send data to client
+            # Wait a bit for connection to establish and data to start flowing
+            await asyncio.sleep(2)
+
+            # Send data to client as it arrives
             while True:
                 try:
+                    # get_data() returns data from the market feed queue
                     response = market_feed.get_data()
                     if response:
+                        # Process and send data to client
                         await manager.send_personal_message({
                             "type": "market_feed",
                             "data": response
                         }, websocket)
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.05)  # Small delay to prevent CPU spinning
                 except Exception as e:
                     await manager.send_personal_message({
                         "type": "error",
                         "message": str(e)
                     }, websocket)
                     break
+
         except (ImportError, AttributeError) as e:
             await manager.send_personal_message({
                 "type": "error",
                 "message": f"Market Feed not available: {str(e)}"
             }, websocket)
+        except Exception as e:
+            await manager.send_personal_message({
+                "type": "error",
+                "message": f"Failed to create market feed: {str(e)}"
+            }, websocket)
 
     except WebSocketDisconnect:
+        pass  # Client disconnected
+    except Exception as e:
+        await manager.send_personal_message({
+            "type": "error",
+            "message": f"WebSocket error: {str(e)}"
+        }, websocket)
+    finally:
+        # Cleanup
         manager.disconnect(websocket)
-        if access_token in manager.market_feeds:
+        if market_feed and access_token in manager.market_feeds:
             try:
-                if hasattr(manager.market_feeds[access_token], 'disconnect'):
-                    manager.market_feeds[access_token].disconnect()
-            except:
-                pass
-            del manager.market_feeds[access_token]
+                # Disconnect the market feed
+                if hasattr(market_feed, 'disconnect'):
+                    market_feed.disconnect()
+                elif hasattr(market_feed, 'close_connection'):
+                    market_feed.close_connection()
+            except Exception as e:
+                print(f"Error disconnecting market feed: {e}")
+            finally:
+                del manager.market_feeds[access_token]
 
 
 @app.websocket("/ws/trading/order-updates/{access_token}")
