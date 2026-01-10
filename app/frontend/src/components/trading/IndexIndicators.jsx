@@ -7,6 +7,7 @@ import {
   Activity,
 } from "lucide-react";
 import TradingWebSocket from "../../services/websocket";
+import api from "../../services/api";
 
 // NIFTY and SENSEX Security IDs
 // These are standard DhanHQ Security IDs for indices
@@ -343,6 +344,13 @@ function IndexIndicators({ accessToken }) {
         } else if (data.type === "connected") {
           console.log("Market feed connected:", data.message);
           setIsConnected(true);
+        } else if (data.type === "market_status") {
+          // Handle market status updates (e.g., market closed, no data)
+          if (data.status === "no_data") {
+            console.log("Market status:", data.message);
+            // Don't set error, just log - market may be closed
+            // Keep showing last received data
+          }
         } else if (data.type === "error") {
           console.error("Market feed error:", data.message);
           setError(data.message);

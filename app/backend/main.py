@@ -1014,10 +1014,16 @@ async def get_instrument_list_segmentwise(request: InstrumentListSegmentwiseRequ
     """Get detailed instrument list for a particular exchange and segment (no authentication required)"""
     if not request.exchange_segment:
         raise HTTPException(status_code=400, detail="Exchange segment is required")
-    result = trading_service.get_instrument_list_segmentwise(request.exchange_segment, request.access_token)
-    if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
-    return result
+    try:
+        result = await trading_service.get_instrument_list_segmentwise(request.exchange_segment, request.access_token)
+        if not result.get("success"):
+            raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
+        return result
+    except Exception as e:
+        print(f"Error in segmentwise endpoint: {e}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Failed to get instrument list: {str(e)}")
 
 
 @app.post("/api/trading/expiry-list")
@@ -1277,8 +1283,16 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
 
                     # Connect to WebSocket (async method)
                     print("Calling connect()...")
-                    await market_feed.connect()
-                    print("Connection successful")
+                    # Add timeout for connection (30 seconds)
+                    try:
+                        await asyncio.wait_for(market_feed.connect(), timeout=30.0)
+                        print("Connection successful")
+                    except asyncio.TimeoutError:
+                        print("Connection timeout - DhanHQ WebSocket may be unreachable")
+                        raise Exception("Connection timeout: DhanHQ WebSocket server may be unreachable or market is closed")
+                    except Exception as e:
+                        print(f"Connection error: {e}")
+                        raise
 
                     # Subscribe to instruments (async method)
                     print("Calling subscribe_instruments()...")
@@ -1299,12 +1313,24 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
 
             # Start market feed in background thread
             # MarketFeed.run_forever() is a blocking call that runs the event loop
+            # We need to create a new event loop in the thread to avoid "event loop is already running" error
             def run_market_feed():
                 try:
+                    # Create a new event loop for this thread
+                    # This avoids conflict with the existing asyncio event loop in FastAPI
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
                     # Run the market feed event loop (blocking)
                     market_feed.run_forever()
                 except Exception as e:
                     print(f"Market feed error: {e}")
+                finally:
+                    # Clean up the event loop
+                    try:
+                        loop.close()
+                    except:
+                        pass
 
             feed_thread = threading.Thread(target=run_market_feed, daemon=True)
             feed_thread.start()
@@ -1313,11 +1339,30 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
             await asyncio.sleep(2)
 
             # Send data to client as it arrives
+            no_data_count = 0  # Track consecutive empty responses
+            last_data_time = None  # Track when we last received data
+            packet_count = 0  # Track total packets received
             while True:
                 try:
                     # get_data() returns data from the market feed queue
+                    # Returns None/empty when no new data is available (e.g., market closed)
                     response = market_feed.get_data()
+
+                    # Log all responses (including None) for debugging
                     if response:
+                        packet_count += 1
+                        print(f"[Market Feed] Packet #{packet_count} received: type={type(response).__name__}, keys={list(response.keys()) if isinstance(response, dict) else 'N/A'}")
+                        print(f"[Market Feed] Raw response data: {response}")
+                    else:
+                        # Log when no data is received (helps debug market closed scenario)
+                        if no_data_count == 0 or no_data_count % 100 == 0:  # Log every 100 empty responses (5 seconds)
+                            print(f"[Market Feed] No data received (empty response #{no_data_count + 1})")
+
+                    if response:
+                        # Reset counters when we receive data
+                        no_data_count = 0
+                        last_data_time = datetime.now()
+
                         # MarketFeed returns data in various formats - normalize it
                         # It could be a dict, list, or nested structure
                         processed_data = response
@@ -1390,11 +1435,44 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
                             if security_id_val in ['13', '51', 13, 51]:
                                 print(f"Index instrument data received: security_id={security_id_val}, data={processed_data}")
 
+                        # Log processed data before sending
+                        print(f"[Market Feed] Sending processed data to frontend: type={type(processed_data).__name__}")
+                        if isinstance(processed_data, dict):
+                            print(f"[Market Feed] Processed data keys: {list(processed_data.keys())}")
+                        elif isinstance(processed_data, list):
+                            print(f"[Market Feed] Processed data: {len(processed_data)} items")
+                            if len(processed_data) > 0:
+                                print(f"[Market Feed] First item keys: {list(processed_data[0].keys()) if isinstance(processed_data[0], dict) else 'N/A'}")
+
                         # Process and send data to client
                         await manager.send_personal_message({
                             "type": "market_feed",
                             "data": processed_data
                         }, websocket)
+                        print(f"[Market Feed] Data sent to frontend successfully")
+                    else:
+                        # No data received (market might be closed or no updates)
+                        no_data_count += 1
+
+                        # After 20 consecutive empty responses (1 second), reduce polling frequency
+                        # and notify frontend if this is the first time we detect no data
+                        if no_data_count == 20:
+                            # Send a status update to frontend that we're not receiving data
+                            # This could indicate market is closed or connection issue
+                            await manager.send_personal_message({
+                                "type": "market_status",
+                                "status": "no_data",
+                                "message": "No market data updates received. Market may be closed."
+                            }, websocket)
+                            print("No market data received for 1 second - market may be closed")
+
+                        # Reduce polling frequency when no data (every 1 second instead of 50ms)
+                        # This reduces CPU usage when market is closed
+                        if no_data_count > 20:
+                            await asyncio.sleep(1.0)  # Poll every 1 second when no data
+                            continue
+
+                    # Normal polling interval when data is flowing
                     await asyncio.sleep(0.05)  # Small delay to prevent CPU spinning
                 except Exception as e:
                     print(f"Error processing market feed data: {e}")

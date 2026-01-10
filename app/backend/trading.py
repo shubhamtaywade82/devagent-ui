@@ -561,7 +561,7 @@ class TradingService:
         except Exception as e:
             return {"success": False, "error": f"Error syncing instruments to database: {str(e)}"}
 
-    def get_instrument_list_segmentwise(self, exchange_segment: str, access_token: Optional[str] = None) -> Dict[str, Any]:
+    async def get_instrument_list_segmentwise(self, exchange_segment: str, access_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Fetch detailed instrument list for a particular exchange and segment
 
@@ -581,11 +581,11 @@ class TradingService:
             # No authentication headers needed
             headers = {}
 
-            # Fetch instrument list
-            response = httpx.get(url, headers=headers, timeout=30.0)
-            response.raise_for_status()
-
-            data = response.json()
+            # Fetch instrument list using async client
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, headers=headers, timeout=30.0)
+                response.raise_for_status()
+                data = response.json()
 
             return {
                 "success": True,
@@ -596,10 +596,14 @@ class TradingService:
                 }
             }
         except httpx.HTTPStatusError as e:
-            return {"success": False, "error": f"HTTP error: {e.response.status_code} - {e.response.text}"}
+            error_text = e.response.text if hasattr(e.response, 'text') else str(e)
+            return {"success": False, "error": f"HTTP error: {e.response.status_code} - {error_text}"}
         except httpx.HTTPError as e:
             return {"success": False, "error": f"HTTP error fetching instrument list: {str(e)}"}
         except Exception as e:
+            import traceback
+            print(f"Error in get_instrument_list_segmentwise: {e}")
+            print(traceback.format_exc())
             return {"success": False, "error": f"Error fetching instrument list: {str(e)}"}
 
 # Global trading service instance

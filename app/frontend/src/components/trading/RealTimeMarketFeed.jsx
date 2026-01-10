@@ -19,6 +19,11 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
         if (data.type === "market_feed") {
           setFeedData(data.data);
           setError("");
+        } else if (data.type === "market_status") {
+          // Handle market status updates (e.g., market closed, no data)
+          if (data.status === "no_data") {
+            setError(data.message || "No market data updates. Market may be closed.");
+          }
         } else if (data.type === "error") {
           setError(data.message);
         }

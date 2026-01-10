@@ -34,11 +34,31 @@ class TradingWebSocket {
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          // Log all WebSocket messages received from backend
+          console.log("[WebSocket] Message received:", {
+            type: data.type,
+            hasData: !!data.data,
+            dataType: data.data
+              ? Array.isArray(data.data)
+                ? "array"
+                : typeof data.data
+              : "none",
+            dataKeys:
+              data.data &&
+              typeof data.data === "object" &&
+              !Array.isArray(data.data)
+                ? Object.keys(data.data)
+                : Array.isArray(data.data)
+                ? `array[${data.data.length}]`
+                : "N/A",
+            fullData: data,
+          });
           if (this.onMessage) {
             this.onMessage(data);
           }
         } catch (error) {
           console.error("Error parsing WebSocket message:", error);
+          console.error("Raw message:", event.data);
         }
       };
 
