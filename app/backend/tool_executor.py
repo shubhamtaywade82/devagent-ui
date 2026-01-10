@@ -59,7 +59,7 @@ async def execute_tool(
                     processed_securities["NSE_IDX"] = security_ids
                 else:
                     processed_securities[exchange_seg] = security_ids
-            
+
             result = trading_service.get_market_quote(
                 access_token,
                 processed_securities
@@ -131,6 +131,168 @@ async def execute_tool(
         return {
             "success": False,
             "error": f"Error executing {function_name}: {str(e)}"
+        }
+
+
+async def search_instruments(
+    query: str,
+    exchange_segment: Optional[str] = None,
+    instrument_type: Optional[str] = None,
+    limit: int = 10
+) -> Dict[str, Any]:
+    """
+    Search for instruments/securities in the database
+
+    Args:
+        query: Search query (symbol name, trading symbol, etc.)
+        exchange_segment: Optional exchange segment filter
+        instrument_type: Optional instrument type filter
+        limit: Maximum number of results
+
+    Returns:
+        Dict with search results including security_id, exchange_segment, etc.
+    """
+    try:
+        db = Database()
+
+        # For indices like NIFTY, SENSEX, try to get from IDX_I segment directly first
+        query_upper = query.upper().strip()
+        if instrument_type and instrument_type.upper() == "INDEX":
+            try:
+                # Try to get instruments from IDX_I segment using API
+                segment_result = await trading_service.get_instrument_list_segmentwise("IDX_I")
+                if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
+                    idx_instruments = segment_result["data"]["instruments"]
+                    # Search in IDX_I instruments
+                    for inst in idx_instruments:
+                        symbol_name = (inst.get("SYMBOL_NAME") or "").upper()
+                        if query_upper in symbol_name or symbol_name == query_upper:
+                            security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
+                            exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
+                            if security_id:
+                                return {
+                                    "success": True,
+                                    "data": {
+                                        "instruments": [{
+                                            "security_id": int(security_id),
+                                            "exchange_segment": "IDX_I",
+                                            "symbol_name": inst.get("SYMBOL_NAME", ""),
+                                            "trading_symbol": inst.get("TRADING_SYMBOL", ""),
+                                            "display_name": inst.get("DISPLAY_NAME", ""),
+                                            "instrument_type": "INDEX",
+                                            "exchange": exchange,
+                                            "segment": "I"
+                                        }],
+                                        "count": 1,
+                                        "query": query
+                                    }
+                                }
+            except Exception as e:
+                pass
+
+        # Get all instruments from database
+        instruments = await db.get_instruments("detailed", limit=50000)
+
+        # Filter instruments
+        results = []
+        for inst in instruments:
+            # Check various fields
+            symbol_name = (inst.get("SYMBOL_NAME") or inst.get("SEM_SYMBOL_NAME") or inst.get("SM_SYMBOL_NAME") or "").upper()
+            trading_symbol = (inst.get("SEM_TRADING_SYMBOL") or inst.get("TRADING_SYMBOL") or "").upper()
+            display_name = (inst.get("DISPLAY_NAME") or inst.get("SEM_CUSTOM_SYMBOL") or "").upper()
+            underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("SEM_UNDERLYING_SYMBOL") or "").upper()
+            security_id = str(inst.get("SEM_SECURITY_ID") or inst.get("SECURITY_ID") or inst.get("SM_SECURITY_ID") or "")
+
+            # Check if query matches
+            matches = (
+                query_upper in symbol_name or
+                query_upper in trading_symbol or
+                query_upper in display_name or
+                query_upper in underlying_symbol or
+                query_upper == security_id
+            )
+
+            if not matches:
+                continue
+
+            # Apply filters if provided
+            if exchange_segment:
+                exchange = inst.get("SEM_EXM_EXCH_ID") or inst.get("EXCH_ID") or inst.get("EXCHANGE_ID") or ""
+                segment = inst.get("SEM_SEGMENT") or inst.get("SEGMENT") or ""
+
+                exchange_upper = exchange.upper()
+                segment_upper = segment.upper()
+
+                # Handle IDX_I specially
+                if exchange_segment == "IDX_I":
+                    if segment_upper != "I":
+                        continue
+                else:
+                    expected_exchange = exchange_segment.split("_")[0]
+                    expected_segment = exchange_segment.split("_")[1] if "_" in exchange_segment else ""
+                    segment_map = {"EQ": "E", "FNO": "D", "FO": "D", "IDX": "I", "COM": "M"}
+                    expected_segment_code = segment_map.get(expected_segment, expected_segment)
+                    if exchange_upper != expected_exchange or (expected_segment_code and segment_upper != expected_segment_code):
+                        continue
+
+            if instrument_type:
+                inst_type = (inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "").upper()
+                if inst_type != instrument_type.upper():
+                    continue
+
+            # Extract relevant information
+            security_id_val = inst.get("SEM_SECURITY_ID") or inst.get("SECURITY_ID") or inst.get("SM_SECURITY_ID")
+            exchange_val = inst.get("SEM_EXM_EXCH_ID") or inst.get("EXCH_ID") or inst.get("EXCHANGE_ID") or "NSE"
+            segment_val = inst.get("SEM_SEGMENT") or inst.get("SEGMENT") or "E"
+
+            # Map to DhanHQ exchange segment format
+            exchange_segment_formatted = "NSE_EQ"
+            segment_upper = segment_val.upper()
+            exchange_upper = exchange_val.upper()
+
+            if segment_upper == "I" or segment_upper == "INDEX":
+                # Indices use IDX_I format regardless of exchange
+                exchange_segment_formatted = "IDX_I"
+            elif exchange_upper == "NSE" and segment_upper == "E":
+                exchange_segment_formatted = "NSE_EQ"
+            elif exchange_upper == "BSE" and segment_upper == "E":
+                exchange_segment_formatted = "BSE_EQ"
+            elif exchange_upper == "NSE" and segment_upper == "D":
+                exchange_segment_formatted = "NSE_FO"
+            elif exchange_upper == "BSE" and segment_upper == "D":
+                exchange_segment_formatted = "BSE_FO"
+            elif exchange_upper == "MCX":
+                exchange_segment_formatted = "MCX_COM"
+            elif exchange_upper == "NCDEX":
+                exchange_segment_formatted = "NCDEX_COM"
+
+            results.append({
+                "security_id": int(security_id_val) if security_id_val else None,
+                "exchange_segment": exchange_segment_formatted,
+                "symbol_name": inst.get("SYMBOL_NAME") or inst.get("SEM_SYMBOL_NAME") or "",
+                "trading_symbol": inst.get("SEM_TRADING_SYMBOL") or inst.get("TRADING_SYMBOL") or "",
+                "display_name": inst.get("DISPLAY_NAME") or inst.get("SEM_CUSTOM_SYMBOL") or "",
+                "instrument_type": inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "",
+                "exchange": exchange_val,
+                "segment": segment_val
+            })
+
+            if len(results) >= limit:
+                break
+
+        return {
+            "success": True,
+            "data": {
+                "instruments": results,
+                "count": len(results),
+                "query": query
+            }
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Error searching instruments: {str(e)}"
         }
 
 

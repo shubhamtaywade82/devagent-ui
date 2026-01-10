@@ -569,13 +569,15 @@ class TradingService:
         as optional parameter for backward compatibility.
 
         Args:
-            exchange_segment: Exchange segment (e.g., "NSE_EQ", "BSE_EQ", "MCX_COM")
+            exchange_segment: Exchange segment (e.g., "NSE_EQ", "BSE_EQ", "MCX_COM", "IDX_I")
             access_token: Optional - not required for this endpoint
 
         Returns:
             Dict with success status and instrument list data
         """
         try:
+            # DhanHQ API endpoint format: https://api.dhan.co/v2/instrument/{exchange_segment}
+            # For indices, use IDX_I directly
             url = f"https://api.dhan.co/v2/instrument/{exchange_segment}"
 
             # No authentication headers needed
@@ -584,27 +586,95 @@ class TradingService:
             # Fetch instrument list using async client
             async with httpx.AsyncClient() as client:
                 response = await client.get(url, headers=headers, timeout=30.0)
-                response.raise_for_status()
-                data = response.json()
+
+                # Get response text first for debugging
+                response_text = ""
+                try:
+                    response_text = response.text
+                except:
+                    pass
+
+                # Check response status
+                if response.status_code != 200:
+                    error_msg = response_text or f"HTTP {response.status_code}"
+                    try:
+                        error_json = response.json()
+                        error_msg = error_json.get("message") or error_json.get("error") or error_json.get("detail") or error_msg
+                    except:
+                        pass
+
+                    return {
+                        "success": False,
+                        "error": f"HTTP {response.status_code}: {error_msg}",
+                        "url": url,
+                        "response_text": response_text[:500] if response_text else ""  # Include first 500 chars for debugging
+                    }
+
+                # Parse JSON response
+                try:
+                    data = response.json()
+                except json.JSONDecodeError as e:
+                    return {
+                        "success": False,
+                        "error": f"Invalid JSON response from API: {str(e)}",
+                        "url": url,
+                        "response_text": response_text[:500] if response_text else ""
+                    }
+
+                # Handle case where API returns error in JSON
+                if isinstance(data, dict):
+                    if "status" in data and data.get("status") != "success":
+                        error_msg = data.get("message") or data.get("error") or data.get("detail") or "Unknown error from API"
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "url": url
+                        }
+                    # Some APIs return data wrapped in a "data" field
+                    if "data" in data and isinstance(data["data"], list):
+                        data = data["data"]
 
             return {
                 "success": True,
                 "data": {
-                    "instruments": data,
+                    "instruments": data if isinstance(data, list) else [data] if data else [],
                     "exchange_segment": exchange_segment,
-                    "count": len(data) if isinstance(data, list) else 0
+                    "count": len(data) if isinstance(data, list) else (1 if data else 0)
                 }
             }
         except httpx.HTTPStatusError as e:
-            error_text = e.response.text if hasattr(e.response, 'text') else str(e)
-            return {"success": False, "error": f"HTTP error: {e.response.status_code} - {error_text}"}
+            error_text = ""
+            try:
+                if hasattr(e, 'response') and e.response:
+                    error_text = e.response.text
+                    try:
+                        error_json = e.response.json()
+                        error_text = error_json.get("message") or error_json.get("error") or error_text
+                    except:
+                        pass
+            except:
+                pass
+            return {
+                "success": False,
+                "error": f"HTTP error {e.response.status_code if hasattr(e, 'response') else 'unknown'}: {error_text or str(e)}",
+                "url": url if 'url' in locals() else "unknown"
+            }
         except httpx.HTTPError as e:
-            return {"success": False, "error": f"HTTP error fetching instrument list: {str(e)}"}
+            return {
+                "success": False,
+                "error": f"HTTP error fetching instrument list: {str(e)}",
+                "url": url if 'url' in locals() else "unknown"
+            }
         except Exception as e:
             import traceback
-            print(f"Error in get_instrument_list_segmentwise: {e}")
+            error_detail = str(e) if str(e) else repr(e)
+            print(f"Error in get_instrument_list_segmentwise: {error_detail}")
             print(traceback.format_exc())
-            return {"success": False, "error": f"Error fetching instrument list: {str(e)}"}
+            return {
+                "success": False,
+                "error": f"Error fetching instrument list: {error_detail}",
+                "url": url if 'url' in locals() else "unknown"
+            }
 
 # Global trading service instance
 trading_service = TradingService()

@@ -28,7 +28,7 @@ def format_market_quote_result(data):
     # DhanHQ returns nested structure: data.data.data.{exchange_segment}.{security_id}
     # Navigate through the nested structure
     quote_data = None
-    
+
     if isinstance(data, dict):
         # Check for empty data first
         if "data" in data and isinstance(data["data"], dict):
@@ -36,20 +36,35 @@ def format_market_quote_result(data):
                 nested_data = data["data"]["data"]
                 # Check if nested data is empty
                 if isinstance(nested_data, dict) and len(nested_data) == 0:
-                    return "No market data available. The market might be closed or the security ID/exchange segment format is incorrect. For indices like NIFTY, use exchange_segment 'IDX_I'."
-                
+                    return "No market data available. Possible reasons:\n1. Market is closed\n2. Security ID or exchange segment format is incorrect\n3. For indices like NIFTY, ensure you're using the correct security_id from search_instruments and exchange_segment 'IDX_I'\n\nTry searching for the instrument first using search_instruments to get the correct security_id and exchange_segment."
+
                 # This is the nested structure: data.data.data.{exchange_segment}
                 nested = nested_data
                 # Iterate through exchange segments (IDX_I, NSE_EQ, NSE_IDX, etc.)
-                for exchange_seg, securities in nested.items():
-                    if isinstance(securities, dict):
-                        # Iterate through security IDs
-                        for security_id, quote_info in securities.items():
-                            if isinstance(quote_info, dict) and quote_info:
-                                quote_data = quote_info
+                # Try IDX_I first for indices, then other segments
+                for exchange_seg in ["IDX_I", "NSE_IDX", "BSE_IDX", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"]:
+                    if exchange_seg in nested:
+                        securities = nested[exchange_seg]
+                        if isinstance(securities, dict):
+                            # Iterate through security IDs
+                            for security_id, quote_info in securities.items():
+                                if isinstance(quote_info, dict) and quote_info:
+                                    quote_data = quote_info
+                                    break
+                            if quote_data:
                                 break
-                        if quote_data:
-                            break
+
+                # If not found in specific segments, try all segments
+                if not quote_data:
+                    for exchange_seg, securities in nested.items():
+                        if isinstance(securities, dict):
+                            # Iterate through security IDs
+                            for security_id, quote_info in securities.items():
+                                if isinstance(quote_info, dict) and quote_info:
+                                    quote_data = quote_info
+                                    break
+                            if quote_data:
+                                break
         else:
             # Try direct access - might be flat structure
             quote_data = data
@@ -754,13 +769,62 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         except Exception as e:
                             print(f"Fallback execution failed: {e}")
 
-                    # Try to detect if user asked about NIFTY specifically
-                    if "nifty" in content.lower() or "nifty" in (messages[-1].get("content", "") or "").lower():
-                        # Directly call get_market_quote for NIFTY
-                        result = await execute_tool("get_market_quote", {"securities": {"NSE_IDX": [99926000]}}, access_token)
-                        if result.get("success"):
-                            formatted = format_market_quote_result(result.get("data", {}))
-                            return {"response": f"Here's the current NIFTY 50 data:\n\n{formatted}"}
+                    # Fallback: If user asked about a stock/index by name and no tool was called,
+                    # automatically search for it first, then fetch the quote
+                    user_message = messages[-1].get("content", "").lower() if messages else ""
+                    if any(keyword in user_message for keyword in ["nifty", "hdfc", "reliance", "tcs", "infy", "sensex", "bank nifty"]):
+                        # Extract the instrument name
+                        instrument_name = None
+                        if "nifty" in user_message:
+                            instrument_name = "NIFTY"
+                            instrument_type = "INDEX"
+                        elif "sensex" in user_message:
+                            instrument_name = "SENSEX"
+                            instrument_type = "INDEX"
+                        elif "hdfc" in user_message:
+                            instrument_name = "HDFC"
+                            instrument_type = "EQUITY"
+                        elif "reliance" in user_message:
+                            instrument_name = "RELIANCE"
+                            instrument_type = "EQUITY"
+
+                        if instrument_name:
+                            # First search for the instrument
+                            search_result = await execute_tool(
+                                "search_instruments",
+                                {"query": instrument_name, "instrument_type": instrument_type, "limit": 1},
+                                access_token
+                            )
+
+                            if search_result.get("success") and search_result.get("data", {}).get("instruments"):
+                                instruments = search_result["data"]["instruments"]
+                                if len(instruments) > 0:
+                                    inst = instruments[0]
+                                    security_id = inst.get("security_id")
+                                    exchange_segment = inst.get("exchange_segment")
+
+                                    if security_id and exchange_segment:
+                                        # Now fetch the market quote
+                                        quote_result = await execute_tool(
+                                            "get_market_quote",
+                                            {"securities": {exchange_segment: [security_id]}},
+                                            access_token
+                                        )
+
+                                        if quote_result.get("success"):
+                                            formatted = format_market_quote_result(quote_result.get("data", {}))
+                                            symbol_name = inst.get("display_name") or inst.get("symbol_name") or instrument_name
+                                            return {"response": f"Here's the current {symbol_name} data:\n\n{formatted}"}
+                                        else:
+                                            error_msg = quote_result.get("error", "Unknown error")
+                                            return {"response": f"Found {symbol_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to fetch market data: {error_msg}"}
+                                    else:
+                                        return {"response": f"Found {instrument_name} but missing security_id or exchange_segment in search results."}
+                                else:
+                                    return {"response": f"Could not find {instrument_name} in the instrument database. Please check the spelling or try a different search term."}
+                            else:
+                                error_msg = search_result.get("error", "Unknown error")
+                                return {"response": f"Failed to search for {instrument_name}: {error_msg}"}
 
                 return {"response": content}
             return {"response": ""}
@@ -1420,11 +1484,17 @@ async def get_instrument_list_segmentwise(request: InstrumentListSegmentwiseRequ
         if not result.get("success"):
             raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
         return result
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error in segmentwise endpoint: {e}")
+        error_detail = str(e) if str(e) else repr(e)
+        print(f"Error in segmentwise endpoint: {error_detail}")
         import traceback
         print(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Failed to get instrument list: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get instrument list: {error_detail}. Check backend logs for details."
+        )
 
 
 @app.post("/api/trading/expiry-list")
@@ -1692,25 +1762,82 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
                         print("Connection timeout - DhanHQ WebSocket may be unreachable")
                         raise Exception("Connection timeout: DhanHQ WebSocket server may be unreachable or market is closed")
                     except Exception as e:
-                        print(f"Connection error: {e}")
-                        raise
+                        # Check if this is a rate limit error (HTTP 429)
+                        error_str = str(e)
+                        if "429" in error_str or "rate limit" in error_str.lower() or "InvalidStatus" in str(type(e).__name__):
+                            # Handle rate limiting gracefully
+                            print(f"Rate limit detected (HTTP 429): {e}")
+                            print("Market feed connection rate limited. Will continue without real-time feed.")
+                            await manager.send_personal_message({
+                                "type": "warning",
+                                "message": "Market feed connection rate limited by DhanHQ (HTTP 429). Real-time market data is temporarily unavailable. Please wait a few minutes and try again. You can still use the REST API endpoints for market data."
+                            }, websocket)
+                            # Return None to indicate market feed is not available, but don't crash
+                            return None
+                        else:
+                            print(f"Connection error: {e}")
+                            raise
 
                     # Subscribe to instruments (async method)
                     print("Calling subscribe_instruments()...")
                     await market_feed.subscribe_instruments()
                     print("Subscription successful")
+                    return True  # Success
                 except Exception as e:
-                    print(f"Market feed initialization error: {e}")
-                    import traceback
-                    print(f"Traceback: {traceback.format_exc()}")
-                    await manager.send_personal_message({
-                        "type": "error",
-                        "message": f"Failed to initialize market feed: {str(e)}"
-                    }, websocket)
-                    raise
+                    # Check if this is a rate limit error (HTTP 429)
+                    error_str = str(e)
+                    if "429" in error_str or "rate limit" in error_str.lower() or "InvalidStatus" in str(type(e).__name__):
+                        # Handle rate limiting gracefully
+                        print(f"Rate limit detected (HTTP 429): {e}")
+                        print("Market feed connection rate limited. Will continue without real-time feed.")
+                        await manager.send_personal_message({
+                            "type": "warning",
+                            "message": "Market feed connection rate limited by DhanHQ (HTTP 429). Real-time market data is temporarily unavailable. Please wait a few minutes and try again. You can still use the REST API endpoints for market data."
+                        }, websocket)
+                        # Return None to indicate market feed is not available, but don't crash
+                        return None
+                    else:
+                        print(f"Market feed initialization error: {e}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
+                        await manager.send_personal_message({
+                            "type": "error",
+                            "message": f"Failed to initialize market feed: {str(e)}"
+                        }, websocket)
+                        # For non-rate-limit errors, we can still continue without market feed
+                        # Don't raise - allow WebSocket to stay connected
+                        print("Continuing without market feed due to initialization error")
+                        return None
 
             # Initialize market feed
-            await initialize_market_feed()
+            market_feed_initialized = await initialize_market_feed()
+
+            # Only start market feed thread if initialization was successful
+            if market_feed_initialized is None:
+                print("Market feed not available. WebSocket will stay connected but no real-time data will be sent.")
+                # Keep WebSocket alive but don't start market feed thread
+                # Send periodic keepalive messages
+                async def keepalive_loop():
+                    while True:
+                        await asyncio.sleep(30)
+                        try:
+                            await manager.send_personal_message({
+                                "type": "keepalive",
+                                "message": "Connection alive. Market feed unavailable due to rate limiting."
+                            }, websocket)
+                        except:
+                            break
+
+                # Start keepalive in background
+                asyncio.create_task(keepalive_loop())
+
+                # Wait for WebSocket disconnect
+                try:
+                    while True:
+                        await websocket.receive_text()
+                except:
+                    pass
+                return
 
             # Start market feed in background thread
             # MarketFeed.run_forever() is a blocking call that runs the event loop
@@ -1740,6 +1867,11 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
             await asyncio.sleep(2)
 
             # Send data to client as it arrives
+            # Safety check: ensure market_feed is available
+            if market_feed is None:
+                print("Market feed not available, cannot send data")
+                return
+
             no_data_count = 0  # Track consecutive empty responses
             last_data_time = None  # Track when we last received data
             packet_count = 0  # Track total packets received
