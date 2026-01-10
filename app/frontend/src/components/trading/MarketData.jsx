@@ -91,15 +91,21 @@ function MarketData({ accessToken }) {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="glass rounded-xl p-8 mb-6">
+    <div
+      className="h-full overflow-y-auto p-6"
+      style={{ position: "relative" }}
+    >
+      <div className="max-w-4xl mx-auto relative" style={{ zIndex: 1 }}>
+        <div
+          className="glass rounded-xl p-8 mb-6 relative"
+          style={{ zIndex: 1 }}
+        >
           <div className="flex items-center gap-3 mb-6">
             <TrendingUp className="w-6 h-6 text-green-500" />
             <h2 className="text-2xl font-bold font-manrope">Market Data</h2>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-4 relative" style={{ zIndex: 1000 }}>
             <InstrumentSearch
               onSelect={handleInstrumentSelect}
               placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."

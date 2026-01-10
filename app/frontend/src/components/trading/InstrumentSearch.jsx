@@ -157,7 +157,7 @@ function InstrumentSearch({
   }
 
   return (
-    <div className="relative w-full">
+    <div className="relative w-full z-50">
       <div className="relative" ref={searchRef}>
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <Search className="h-5 w-5 text-zinc-400" />
@@ -192,7 +192,8 @@ function InstrumentSearch({
       {showSuggestions && filteredInstruments.length > 0 && (
         <div
           ref={suggestionsRef}
-          className="absolute z-50 w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl max-h-80 overflow-y-auto"
+          className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl max-h-80 overflow-y-auto"
+          style={{ zIndex: 1001 }}
         >
           {filteredInstruments.map((instrument, idx) => {
             const securityId = instrument.SEM_SECURITY_ID || instrument.SECURITY_ID || instrument.SM_SECURITY_ID
@@ -228,7 +229,10 @@ function InstrumentSearch({
       )}
 
       {showSuggestions && searchQuery.length >= 2 && filteredInstruments.length === 0 && (
-        <div className="absolute z-50 w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl p-4 text-center text-zinc-400 text-sm">
+        <div
+          className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-4 text-center text-zinc-400 text-sm"
+          style={{ zIndex: 1001 }}
+        >
           No instruments found
         </div>
       )}
