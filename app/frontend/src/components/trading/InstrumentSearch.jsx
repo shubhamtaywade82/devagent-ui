@@ -16,21 +16,47 @@ function InstrumentSearch({
   const [error, setError] = useState("");
   const searchRef = useRef(null);
   const suggestionsRef = useRef(null);
+  const instrumentsCacheRef = useRef(null); // Cache instruments to avoid reloading
 
-  // Load instruments on mount
+  // Load instruments on mount - with caching
   useEffect(() => {
+    // Use cached instruments if available and no exchangeSegment change
+    if (instrumentsCacheRef.current && !exchangeSegment) {
+      setInstruments(instrumentsCacheRef.current);
+      setLoading(false);
+      return;
+    }
     loadInstruments();
   }, [accessToken, exchangeSegment]);
 
-  // Filter instruments based on search query
+  // Filter instruments based on search query - optimized with debouncing
   useEffect(() => {
-    if (searchQuery.trim().length >= 2) {
+    if (searchQuery.trim().length < 2) {
+      setFilteredInstruments([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    // Debounce search to avoid excessive filtering
+    const timeoutId = setTimeout(() => {
       const query = searchQuery.toLowerCase().trim();
+
+      if (query.length < 2) {
+        setFilteredInstruments([]);
+        setShowSuggestions(false);
+        return;
+      }
+
+      // Optimized filtering - limit search to first 10000 instruments for performance
+      // Most common instruments are usually at the top
+      const searchLimit = Math.min(instruments.length, 10000);
       const filtered = instruments
+        .slice(0, searchLimit)
         .filter((inst) => {
           const symbolName = (
             inst.SYMBOL_NAME ||
             inst.SEM_SYMBOL_NAME ||
+            inst.SM_SYMBOL_NAME ||
             ""
           ).toLowerCase();
           const tradingSymbol = (
@@ -46,6 +72,7 @@ function InstrumentSearch({
           const securityId = (
             inst.SEM_SECURITY_ID ||
             inst.SECURITY_ID ||
+            inst.SM_SECURITY_ID ||
             ""
           ).toString();
           const isin = (inst.ISIN || "").toLowerCase();
@@ -59,12 +86,12 @@ function InstrumentSearch({
           );
         })
         .slice(0, 10); // Limit to 10 results
+
       setFilteredInstruments(filtered);
       setShowSuggestions(filtered.length > 0);
-    } else {
-      setFilteredInstruments([]);
-      setShowSuggestions(false);
-    }
+    }, 200); // 200ms debounce
+
+    return () => clearTimeout(timeoutId);
   }, [searchQuery, instruments]);
 
   // Close suggestions when clicking outside
@@ -87,31 +114,91 @@ function InstrumentSearch({
     setLoading(true);
     setError("");
     try {
+      // Strategy: Use segmentwise API by default (no auth needed, better data quality, faster)
+      // Load NSE_EQ by default, can add BSE_EQ if needed
       let response;
 
-      if (accessToken && exchangeSegment) {
-        // Use segmentwise API if access token and exchange segment are provided
-        response = await api.getInstrumentListSegmentwise(
-          accessToken,
-          exchangeSegment
-        );
+      if (exchangeSegment) {
+        // Use specified segment
+        try {
+          response = await api.getInstrumentListSegmentwise(exchangeSegment);
+          if (!response.success) {
+            response = await api.getInstrumentListCSV("detailed");
+          }
+        } catch (err) {
+          response = await api.getInstrumentListCSV("detailed");
+        }
       } else {
-        // Use CSV API (no auth needed) - use compact format for faster loading
-        response = await api.getInstrumentListCSV("compact");
+        // Default: Load NSE_EQ (most common, fastest)
+        // Optionally load BSE_EQ in parallel for better coverage
+        try {
+          const [nseResponse, bseResponse] = await Promise.allSettled([
+            api.getInstrumentListSegmentwise("NSE_EQ"),
+            api.getInstrumentListSegmentwise("BSE_EQ"),
+          ]);
+
+          let loadedInstruments = [];
+
+          if (nseResponse.status === "fulfilled" && nseResponse.value.success) {
+            const nseList =
+              nseResponse.value.data?.instruments ||
+              nseResponse.value.data?.data ||
+              [];
+            if (Array.isArray(nseList)) {
+              loadedInstruments = [...loadedInstruments, ...nseList];
+            }
+          }
+
+          if (bseResponse.status === "fulfilled" && bseResponse.value.success) {
+            const bseList =
+              bseResponse.value.data?.instruments ||
+              bseResponse.value.data?.data ||
+              [];
+            if (Array.isArray(bseList)) {
+              loadedInstruments = [...loadedInstruments, ...bseList];
+            }
+          }
+
+          if (loadedInstruments.length > 0) {
+            response = {
+              success: true,
+              data: {
+                instruments: loadedInstruments,
+                count: loadedInstruments.length,
+              },
+            };
+            console.log(
+              `Loaded ${loadedInstruments.length} instruments from segmentwise API (NSE_EQ + BSE_EQ)`
+            );
+          } else {
+            // Fallback to CSV if both fail
+            response = await api.getInstrumentListCSV("detailed");
+          }
+        } catch (err) {
+          console.warn("Segmentwise API error, using CSV:", err);
+          response = await api.getInstrumentListCSV("detailed");
+        }
       }
 
       if (response.success) {
         // Handle both CSV format (array of objects) and segmentwise format
         const instList =
           response.data?.instruments || response.data?.data || [];
+        let finalList = [];
+
         if (Array.isArray(instList)) {
-          setInstruments(instList);
+          finalList = instList;
         } else if (typeof instList === "object") {
           // If it's an object, convert to array
-          setInstruments(Object.values(instList));
-        } else {
-          setInstruments([]);
+          finalList = Object.values(instList);
         }
+
+        setInstruments(finalList);
+        // Cache instruments if no specific exchangeSegment (for reuse)
+        if (!exchangeSegment) {
+          instrumentsCacheRef.current = finalList;
+        }
+        console.log(`Loaded ${finalList.length} instruments`);
       } else {
         setError(response.error || "Failed to load instruments");
       }

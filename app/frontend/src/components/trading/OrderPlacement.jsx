@@ -180,6 +180,7 @@ function OrderPlacement({ accessToken }) {
               <InstrumentSearch
                 onSelect={handleInstrumentSelect}
                 placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
+                accessToken={accessToken}
               />
               {selectedInstrument && (
                 <div className="mt-2 text-sm text-zinc-400">

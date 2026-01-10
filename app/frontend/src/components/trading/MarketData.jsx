@@ -121,6 +121,7 @@ function MarketData({ accessToken }) {
             <InstrumentSearch
               onSelect={handleInstrumentSelect}
               placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
+              accessToken={accessToken}
             />
             {selectedInstrument && (
               <div className="text-sm">

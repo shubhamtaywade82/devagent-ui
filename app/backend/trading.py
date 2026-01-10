@@ -9,6 +9,7 @@ import asyncio
 import json
 import csv
 import io
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -371,7 +372,7 @@ class TradingService:
                 return {"success": False, "error": "format_type must be 'compact' or 'detailed'"}
 
             # Fetch CSV data
-            response = httpx.get(url, timeout=30.0)
+            response = httpx.get(url, timeout=60.0)
             response.raise_for_status()
 
             # Parse CSV data
@@ -392,25 +393,58 @@ class TradingService:
         except Exception as e:
             return {"success": False, "error": f"Error fetching instrument list: {str(e)}"}
 
-    def get_instrument_list_segmentwise(self, access_token: str, exchange_segment: str) -> Dict[str, Any]:
+    async def sync_instruments_to_db(self, db, format_type: str = "detailed") -> Dict[str, Any]:
+        """
+        Sync instruments from CSV to database
+
+        Args:
+            db: Database instance
+            format_type: "compact" or "detailed"
+
+        Returns:
+            Dict with success status and sync results
+        """
+        try:
+            # Fetch CSV data
+            csv_result = self.get_instrument_list_csv(format_type)
+            if not csv_result.get("success"):
+                return csv_result
+
+            instruments = csv_result["data"]["instruments"]
+
+            # Save to database
+            result = await db.save_instruments(instruments, format_type)
+
+            return {
+                "success": True,
+                "data": {
+                    "synced_count": result.get("count", 0),
+                    "updated_at": result.get("updated_at"),
+                    "format": format_type
+                }
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Error syncing instruments to database: {str(e)}"}
+
+    def get_instrument_list_segmentwise(self, exchange_segment: str, access_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Fetch detailed instrument list for a particular exchange and segment
 
+        Note: This endpoint does not require authentication, but access_token is kept
+        as optional parameter for backward compatibility.
+
         Args:
-            access_token: DhanHQ access token
             exchange_segment: Exchange segment (e.g., "NSE_EQ", "BSE_EQ", "MCX_COM")
+            access_token: Optional - not required for this endpoint
 
         Returns:
             Dict with success status and instrument list data
         """
         try:
-            if not self.client_id:
-                return {"success": False, "error": "DHAN_CLIENT_ID not configured"}
-
             url = f"https://api.dhan.co/v2/instrument/{exchange_segment}"
-            headers = {
-                "access-token": access_token
-            }
+
+            # No authentication headers needed
+            headers = {}
 
             # Fetch instrument list
             response = httpx.get(url, headers=headers, timeout=30.0)
@@ -427,8 +461,6 @@ class TradingService:
                 }
             }
         except httpx.HTTPStatusError as e:
-            if e.response.status_code == 401:
-                return {"success": False, "error": "Invalid or expired access token"}
             return {"success": False, "error": f"HTTP error: {e.response.status_code} - {e.response.text}"}
         except httpx.HTTPError as e:
             return {"success": False, "error": f"HTTP error fetching instrument list: {str(e)}"}

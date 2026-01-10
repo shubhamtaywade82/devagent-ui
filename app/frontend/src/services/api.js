@@ -181,17 +181,29 @@ export default {
     return response.data;
   },
 
-  async getInstrumentListCSV(formatType = "compact") {
+  async getInstrumentListCSV(formatType = "detailed") {
     const response = await api.post("/api/trading/instruments/csv", {
       format_type: formatType,
     });
     return response.data;
   },
 
-  async getInstrumentListSegmentwise(accessToken, exchangeSegment) {
+  async syncInstruments(formatType = "detailed") {
+    const response = await api.post(
+      `/api/trading/instruments/sync?format_type=${formatType}`
+    );
+    return response.data;
+  },
+
+  async getInstrumentsMetadata() {
+    const response = await api.get("/api/trading/instruments/metadata");
+    return response.data;
+  },
+
+  async getInstrumentListSegmentwise(exchangeSegment, accessToken = null) {
     const response = await api.post("/api/trading/instruments/segmentwise", {
-      access_token: accessToken,
       exchange_segment: exchangeSegment,
+      ...(accessToken && { access_token: accessToken }), // Optional
     });
     return response.data;
   },

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ import httpx
 import json
 import asyncio
 import threading
+from datetime import datetime, timedelta
 
 from database import Database
 from models import Project, File, ChatMessage
@@ -29,6 +30,66 @@ app.add_middleware(
 
 # Initialize database
 db = Database()
+
+# Background task for weekly instrument updates
+async def weekly_instrument_sync():
+    """Background task to sync instruments weekly"""
+    while True:
+        try:
+            # Wait 7 days (604800 seconds)
+            await asyncio.sleep(604800)
+
+            # Sync instruments
+            db_instance = Database()
+            result = await trading_service.sync_instruments_to_db(db_instance, "detailed")
+            if result.get("success"):
+                print(f"Instruments synced successfully: {result['data']['synced_count']} instruments")
+            else:
+                print(f"Instrument sync failed: {result.get('error')}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Error in weekly instrument sync: {e}")
+
+# Global variable for sync task
+sync_task = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize instruments on startup"""
+    global sync_task
+    db_instance = Database()
+
+    # Check if instruments exist, sync if needed
+    instruments_exist = await db_instance.instruments_exist("detailed")
+    if not instruments_exist:
+        print("No instruments in database, performing initial sync...")
+        try:
+            result = await trading_service.sync_instruments_to_db(db_instance, "detailed")
+            if result.get("success"):
+                print(f"Initial instrument sync completed: {result['data']['synced_count']} instruments")
+            else:
+                print(f"Initial instrument sync failed: {result.get('error')}")
+        except Exception as e:
+            print(f"Error in initial instrument sync: {e}")
+    else:
+        metadata = await db_instance.get_instruments_metadata()
+        if metadata:
+            print(f"Instruments in database: {metadata.get('count', 0)} instruments, last updated: {metadata.get('last_updated', 'unknown')}")
+
+    # Start weekly sync task
+    sync_task = asyncio.create_task(weekly_instrument_sync())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    global sync_task
+    if sync_task:
+        sync_task.cancel()
+        try:
+            await sync_task
+        except asyncio.CancelledError:
+            pass
 
 # AI Provider configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -163,12 +224,12 @@ class LedgerRequest(BaseModel):
 
 
 class InstrumentListCSVRequest(BaseModel):
-    format_type: str = "compact"  # "compact" or "detailed"
+    format_type: str = "detailed"  # "compact" or "detailed"
 
 
 class InstrumentListSegmentwiseRequest(BaseModel):
-    access_token: str
     exchange_segment: str  # e.g., "NSE_EQ", "BSE_EQ", "MCX_COM"
+    access_token: Optional[str] = None  # Optional - not required for this endpoint
 
 
 # Health check
@@ -853,23 +914,74 @@ async def get_securities(request: TradingAuthRequest):
 
 @app.post("/api/trading/instruments/csv")
 async def get_instrument_list_csv(request: InstrumentListCSVRequest):
-    """Get instrument list from CSV endpoints (compact or detailed)"""
+    """Get instrument list from CSV endpoints (compact or detailed) - checks database first"""
     if request.format_type not in ["compact", "detailed"]:
         raise HTTPException(status_code=400, detail="format_type must be 'compact' or 'detailed'")
+
+    # Try database first
+    instruments = await db.get_instruments(request.format_type)
+    if instruments:
+        return {
+            "success": True,
+            "data": {
+                "instruments": instruments,
+                "count": len(instruments),
+                "format": request.format_type,
+                "source": "database"
+            }
+        }
+
+    # Fallback to CSV API if not in database
     result = trading_service.get_instrument_list_csv(request.format_type)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
     return result
 
 
+@app.post("/api/trading/instruments/sync")
+async def sync_instruments(background_tasks: BackgroundTasks, format_type: str = "detailed"):
+    """Manually trigger instrument sync from CSV to database"""
+    if format_type not in ["compact", "detailed"]:
+        raise HTTPException(status_code=400, detail="format_type must be 'compact' or 'detailed'")
+
+    # Run sync in background
+    async def sync_task():
+        result = await trading_service.sync_instruments_to_db(db, format_type)
+        if result.get("success"):
+            print(f"Instruments synced: {result['data']['synced_count']} instruments")
+        else:
+            print(f"Sync failed: {result.get('error')}")
+
+    background_tasks.add_task(sync_task)
+
+    return {
+        "success": True,
+        "message": "Instrument sync started in background",
+        "format": format_type
+    }
+
+
+@app.get("/api/trading/instruments/metadata")
+async def get_instruments_metadata():
+    """Get instruments metadata (last update time, count, etc.)"""
+    metadata = await db.get_instruments_metadata()
+    if not metadata:
+        return {
+            "success": False,
+            "message": "No instruments metadata found"
+        }
+    return {
+        "success": True,
+        "data": metadata
+    }
+
+
 @app.post("/api/trading/instruments/segmentwise")
 async def get_instrument_list_segmentwise(request: InstrumentListSegmentwiseRequest):
-    """Get detailed instrument list for a particular exchange and segment"""
-    if not request.access_token:
-        raise HTTPException(status_code=400, detail="Access token is required")
+    """Get detailed instrument list for a particular exchange and segment (no authentication required)"""
     if not request.exchange_segment:
         raise HTTPException(status_code=400, detail="Exchange segment is required")
-    result = trading_service.get_instrument_list_segmentwise(request.access_token, request.exchange_segment)
+    result = trading_service.get_instrument_list_segmentwise(request.exchange_segment, request.access_token)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
     return result

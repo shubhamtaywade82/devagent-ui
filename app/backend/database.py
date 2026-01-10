@@ -16,6 +16,7 @@ class Database:
         self.db = self.client[db_name]
         self.projects = self.db.projects
         self.files = self.db.files
+        self.instruments = self.db.instruments
 
     async def create_project(self, project_data: Dict) -> str:
         """Create a new project"""
@@ -130,4 +131,94 @@ class Database:
             return result.deleted_count
         except:
             return 0
+
+    # Instruments methods
+    async def save_instruments(self, instruments: List[Dict], format_type: str = "detailed") -> Dict:
+        """Save or update instruments in database"""
+        try:
+            # Delete existing instruments
+            await self.instruments.delete_many({"format": format_type})
+
+            # Insert new instruments with metadata
+            now = datetime.utcnow()
+            instruments_with_meta = []
+            for inst in instruments:
+                inst_data = {
+                    **inst,
+                    "format": format_type,
+                    "updated_at": now
+                }
+                instruments_with_meta.append(inst_data)
+
+            if instruments_with_meta:
+                await self.instruments.insert_many(instruments_with_meta)
+
+            # Update metadata
+            await self.instruments.update_one(
+                {"_id": "metadata"},
+                {
+                    "$set": {
+                        "last_updated": now,
+                        "format": format_type,
+                        "count": len(instruments),
+                        "updated_at": now
+                    }
+                },
+                upsert=True
+            )
+
+            return {
+                "success": True,
+                "count": len(instruments),
+                "updated_at": now.isoformat()
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def get_instruments(self, format_type: str = "detailed", limit: Optional[int] = None) -> List[Dict]:
+        """Get instruments from database"""
+        try:
+            query = {"format": format_type}
+            cursor = self.instruments.find(query)
+
+            if limit:
+                cursor = cursor.limit(limit)
+
+            instruments = []
+            async for inst in cursor:
+                # Remove MongoDB _id and format field
+                inst.pop("_id", None)
+                inst.pop("format", None)
+                inst.pop("updated_at", None)
+                instruments.append(inst)
+
+            return instruments
+        except Exception as e:
+            print(f"Error getting instruments from database: {e}")
+            return []
+
+    async def get_instruments_metadata(self) -> Optional[Dict]:
+        """Get instruments metadata (last update time, count, etc.)"""
+        try:
+            metadata = await self.instruments.find_one({"_id": "metadata"})
+            if metadata:
+                metadata["id"] = str(metadata.get("_id", ""))
+                if "_id" in metadata:
+                    del metadata["_id"]
+                if "last_updated" in metadata and metadata["last_updated"]:
+                    metadata["last_updated"] = metadata["last_updated"].isoformat()
+                if "updated_at" in metadata and metadata["updated_at"]:
+                    metadata["updated_at"] = metadata["updated_at"].isoformat()
+            return metadata
+        except Exception as e:
+            print(f"Error getting instruments metadata: {e}")
+            return None
+
+    async def instruments_exist(self, format_type: str = "detailed") -> bool:
+        """Check if instruments exist in database"""
+        try:
+            count = await self.instruments.count_documents({"format": format_type})
+            return count > 0
+        except:
+            return False
 
