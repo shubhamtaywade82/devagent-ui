@@ -1266,14 +1266,28 @@ async def market_feed_websocket(websocket: WebSocket, access_token: str):
             # MarketFeed requires async initialization
             async def initialize_market_feed():
                 try:
+                    # Check what instruments are actually in the feed
+                    if hasattr(market_feed, 'instruments'):
+                        print(f"DhanFeed instruments before subscription: {market_feed.instruments}")
+
                     # Authorize the connection (async method)
+                    print("Calling authorize()...")
                     await market_feed.authorize()
+                    print("Authorization successful")
+
                     # Connect to WebSocket (async method)
+                    print("Calling connect()...")
                     await market_feed.connect()
+                    print("Connection successful")
+
                     # Subscribe to instruments (async method)
+                    print("Calling subscribe_instruments()...")
                     await market_feed.subscribe_instruments()
+                    print("Subscription successful")
                 except Exception as e:
                     print(f"Market feed initialization error: {e}")
+                    import traceback
+                    print(f"Traceback: {traceback.format_exc()}")
                     await manager.send_personal_message({
                         "type": "error",
                         "message": f"Failed to initialize market feed: {str(e)}"

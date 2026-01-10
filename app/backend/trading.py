@@ -1,16 +1,16 @@
 """
 Trading module for DhanHQ integration
 """
-from dhanhq import dhanhq
+from dhanhq import dhanhq  # type: ignore
 from typing import Optional, Dict, List, Any, Callable
 import os
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 import asyncio
 import json
 import csv
 import io
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # pyright: ignore[reportMissingImports]
 
 load_dotenv()
 
@@ -401,21 +401,52 @@ class TradingService:
         if not self.client_id:
             raise ValueError("DHAN_CLIENT_ID is not configured")
         try:
-            # Import DhanFeed (actual class name in dhanhq library)
-            from dhanhq.marketfeed import DhanFeed
+            # Import DhanFeed and constants (actual class name in dhanhq library)
+            from dhanhq.marketfeed import DhanFeed, Ticker, Quote, Full, NSE, BSE, IDX
 
-            # Convert security IDs to strings (per official example pattern)
-            # The example shows: (DhanFeed.NSE, "1333", DhanFeed.Ticker)
+            # Convert instruments to use proper constants
+            # For v2, use RequestCode values directly: Ticker=15, Quote=17, Full=21
+            # Map numeric feed codes to constants
+            feed_code_to_constant = {
+                1: Ticker,   # Ticker Packet (RequestCode 15)
+                2: Quote,    # Quote Packet (RequestCode 17)
+                3: Full,     # Full Packet (RequestCode 21)
+                15: Ticker,  # Direct RequestCode mapping
+                17: Quote,
+                21: Full,
+            }
+
+            # Map exchange codes to constants
+            exchange_code_to_constant = {
+                0: IDX,   # Index (IDX = 0)
+                1: NSE,   # NSE (NSE = 1)
+                2: BSE,   # BSE (BSE = 2)
+            }
+
+            # Note: IDX, NSE, BSE are just integers (0, 1, 2), so mapping is optional
+            # But we keep it for clarity and consistency
+
             converted_instruments = []
             for inst in instruments:
                 if len(inst) >= 3:
                     exchange_code, security_id, feed_code = inst[0], inst[1], inst[2]
-                    # Convert security_id to string to match official example
+                    # Convert security_id to string
                     security_id_str = str(security_id) if not isinstance(security_id, str) else security_id
-                    converted_instruments.append((exchange_code, security_id_str, feed_code))
+
+                    # Convert exchange_code to constant if available
+                    exchange_constant = exchange_code_to_constant.get(exchange_code, exchange_code)
+
+                    # Convert feed_code to constant (RequestCode value)
+                    feed_constant = feed_code_to_constant.get(feed_code, Quote)  # Default to Quote
+
+                    converted_instruments.append((exchange_constant, security_id_str, feed_constant))
+                    print(f"Converted instrument: exchange={exchange_code}->{exchange_constant}, security_id={security_id_str}, feed={feed_code}->{feed_constant}")
                 else:
                     # Keep as-is if format is different
                     converted_instruments.append(inst)
+
+            print(f"Final converted instruments for DhanFeed: {converted_instruments}")
+            print(f"Version: {version}")
 
             # DhanFeed.__init__ signature: (self, client_id, access_token, instruments, version='v1')
             # Pass client_id and access_token as separate arguments, not as tuple or DhanContext
