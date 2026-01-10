@@ -15,6 +15,11 @@ function TradingDashboard({ accessToken }) {
   }, [accessToken])
 
   const loadDashboardData = async () => {
+    if (!accessToken) {
+      setLoading(false)
+      return
+    }
+
     try {
       const [fundsData, positionsData, ordersData] = await Promise.all([
         api.getFunds(accessToken),
@@ -23,8 +28,18 @@ function TradingDashboard({ accessToken }) {
       ])
 
       if (fundsData.success) setFunds(fundsData.data)
-      if (positionsData.success) setPositions(positionsData.data || [])
-      if (ordersData.success) setOrders(ordersData.data || [])
+      if (positionsData.success) {
+        const positionsArray = Array.isArray(positionsData.data) 
+          ? positionsData.data 
+          : (positionsData.data?.data || positionsData.data?.positions || [])
+        setPositions(positionsArray)
+      }
+      if (ordersData.success) {
+        const ordersArray = Array.isArray(ordersData.data) 
+          ? ordersData.data 
+          : (ordersData.data?.data || ordersData.data?.orders || [])
+        setOrders(ordersArray)
+      }
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
     } finally {
@@ -34,8 +49,16 @@ function TradingDashboard({ accessToken }) {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-zinc-400">Loading dashboard...</div>
+      <div className="h-full flex items-center justify-center bg-zinc-950">
+        <div className="text-zinc-400 text-lg">Loading dashboard...</div>
+      </div>
+    )
+  }
+
+  if (!accessToken) {
+    return (
+      <div className="h-full flex items-center justify-center bg-zinc-950">
+        <div className="text-red-400 text-lg">No access token available</div>
       </div>
     )
   }
@@ -44,7 +67,7 @@ function TradingDashboard({ accessToken }) {
   const activeOrders = orders.filter(o => o.orderStatus !== 'COMPLETE' && o.orderStatus !== 'CANCELLED').length
 
   return (
-    <div className="h-full overflow-y-auto p-6">
+    <div className="h-full overflow-y-auto p-6 bg-zinc-950">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         {/* Available Balance */}
         <div className="glass rounded-lg p-4">

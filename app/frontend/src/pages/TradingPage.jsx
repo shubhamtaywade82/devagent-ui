@@ -60,7 +60,7 @@ function TradingPage() {
   return (
     <div className="h-screen bg-zinc-950 flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="h-14 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm flex items-center justify-between px-6">
+      <div className="h-14 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm flex items-center justify-between px-6 z-10">
         <div className="flex items-center gap-4">
           <TrendingUp className="w-6 h-6 text-green-500" />
           <h1 className="text-lg font-semibold font-manrope text-white">
