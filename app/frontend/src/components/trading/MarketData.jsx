@@ -11,12 +11,24 @@ function MarketData({ accessToken }) {
   const [error, setError] = useState("");
 
   const handleInstrumentSelect = (instrument) => {
-    setSelectedInstrument(instrument);
-    if (instrument) {
-      fetchMarketQuote(instrument);
-    } else {
+    if (!instrument) {
+      setSelectedInstrument(null);
       setQuoteData(null);
+      return;
     }
+
+    // Validate instrument has required fields
+    if (!instrument.securityId || instrument.securityId.trim() === "") {
+      setError(
+        "Selected instrument has invalid Security ID. Please select another instrument."
+      );
+      setSelectedInstrument(null);
+      setQuoteData(null);
+      return;
+    }
+
+    setSelectedInstrument(instrument);
+    fetchMarketQuote(instrument);
   };
 
   const fetchMarketQuote = async (instrument) => {
@@ -111,14 +123,27 @@ function MarketData({ accessToken }) {
               placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
             />
             {selectedInstrument && (
-              <div className="text-sm text-zinc-400">
-                Selected:{" "}
-                <span className="text-white font-medium">
-                  {selectedInstrument.displayName ||
-                    selectedInstrument.symbolName}
-                </span>{" "}
-                (ID: {selectedInstrument.securityId},{" "}
-                {selectedInstrument.exchangeSegment})
+              <div className="text-sm">
+                {selectedInstrument.securityId ? (
+                  <div className="text-zinc-400">
+                    Selected:{" "}
+                    <span className="text-white font-medium">
+                      {selectedInstrument.displayName ||
+                        selectedInstrument.symbolName}
+                    </span>{" "}
+                    (ID: {selectedInstrument.securityId},{" "}
+                    {selectedInstrument.exchangeSegment})
+                  </div>
+                ) : (
+                  <div className="text-red-400 bg-red-500/20 border border-red-500/50 rounded-lg p-3">
+                    ⚠️ Selected instrument "
+                    {selectedInstrument.displayName ||
+                      selectedInstrument.symbolName}
+                    " is missing Security ID. This instrument may not be
+                    tradable or may require a different identifier. Please
+                    select a different instrument.
+                  </div>
+                )}
               </div>
             )}
           </div>

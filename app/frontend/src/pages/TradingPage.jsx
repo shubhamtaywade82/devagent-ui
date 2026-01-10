@@ -68,21 +68,29 @@ function TradingPage() {
   return (
     <div className="h-screen bg-zinc-950 flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="h-14 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm flex items-center justify-between px-6 z-10">
-        <div className="flex items-center gap-4">
-          <TrendingUp className="w-6 h-6 text-green-500" />
-          <h1 className="text-lg font-semibold font-manrope text-white">
-            Trading Dashboard
-          </h1>
+      <div className="h-16 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm flex items-center justify-between px-6 z-10">
+        <div className="flex items-center gap-6 flex-1">
+          <div className="flex items-center gap-3">
+            <TrendingUp className="w-6 h-6 text-green-500" />
+            <h1 className="text-lg font-semibold font-manrope text-white">
+              Trading Dashboard
+            </h1>
+          </div>
           {userProfile && (
-            <span className="text-sm text-zinc-400">
+            <span className="text-sm text-zinc-400 hidden md:block">
               {userProfile.name || userProfile.clientId}
             </span>
+          )}
+          {/* Market Indices - Compact */}
+          {isAuthenticated && (
+            <div className="flex-1 flex justify-center">
+              <IndexIndicators accessToken={accessToken} />
+            </div>
           )}
         </div>
         <button
           onClick={handleLogout}
-          className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors ml-4"
         >
           Logout
         </button>
@@ -145,35 +153,26 @@ function TradingPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden flex flex-col">
-        {/* NIFTY and SENSEX - Always visible at top */}
-        {isAuthenticated && accessToken && (
-          <div className="border-b border-zinc-800 bg-zinc-900/50 p-4">
-            <IndexIndicators accessToken={accessToken} />
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden">
+          {activeTab === "dashboard" && (
+            <TradingDashboard accessToken={accessToken} />
+          )}
+          {activeTab === "orders" && (
+            <OrderPlacement accessToken={accessToken} />
+          )}
+          {activeTab === "portfolio" && (
+            <PortfolioView accessToken={accessToken} />
+          )}
+          {activeTab === "market" && <MarketData accessToken={accessToken} />}
+        </div>
+
+        {/* Live Order Updates Sidebar */}
+        {isAuthenticated && (
+          <div className="w-80 border-l border-zinc-800 overflow-y-auto">
+            <LiveOrderUpdates accessToken={accessToken} />
           </div>
         )}
-
-        <div className="flex-1 overflow-hidden flex">
-          <div className="flex-1 overflow-hidden">
-            {activeTab === "dashboard" && (
-              <TradingDashboard accessToken={accessToken} />
-            )}
-            {activeTab === "orders" && (
-              <OrderPlacement accessToken={accessToken} />
-            )}
-            {activeTab === "portfolio" && (
-              <PortfolioView accessToken={accessToken} />
-            )}
-            {activeTab === "market" && <MarketData accessToken={accessToken} />}
-          </div>
-
-          {/* Live Order Updates Sidebar */}
-          {isAuthenticated && (
-            <div className="w-80 border-l border-zinc-800 overflow-y-auto">
-              <LiveOrderUpdates accessToken={accessToken} />
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
