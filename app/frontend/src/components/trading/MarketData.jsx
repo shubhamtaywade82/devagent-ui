@@ -29,7 +29,34 @@ function MarketData({ accessToken }) {
       })
 
       if (response.success) {
-        setQuoteData(response.data)
+        // Parse the nested response structure
+        // Response structure: data.data.data.NSE_EQ.{securityId}
+        const responseData = response.data
+        let quoteInfo = null
+
+        // Try to extract the actual quote data from nested structure
+        if (responseData?.data?.data) {
+          const nestedData = responseData.data.data
+          // Find the first exchange segment and security
+          for (const exchangeSegment in nestedData) {
+            const securities = nestedData[exchangeSegment]
+            for (const secId in securities) {
+              quoteInfo = {
+                securityId: secId,
+                exchangeSegment: exchangeSegment,
+                ...securities[secId]
+              }
+              break
+            }
+            if (quoteInfo) break
+          }
+        }
+
+        if (quoteInfo) {
+          setQuoteData(quoteInfo)
+        } else {
+          setError('Could not parse quote data from response')
+        }
       } else {
         setError(response.error || 'Failed to get market quote')
       }
@@ -77,26 +104,48 @@ function MarketData({ accessToken }) {
         {quoteData && (
           <div className="glass rounded-xl p-8">
             <h3 className="text-lg font-semibold mb-4">Quote Data</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {quoteData.ohlc_data && Object.entries(quoteData.ohlc_data).map(([key, value]) => (
-                <div key={key} className="bg-zinc-900 rounded-lg p-4">
-                  <div className="text-sm text-zinc-400 mb-1">{key}</div>
-                  <div className="text-lg font-semibold text-white">
-                    {typeof value === 'number' ? `₹${value.toFixed(2)}` : value}
-                  </div>
+
+            {/* Last Price */}
+            <div className="mb-6">
+              <div className="bg-zinc-900 rounded-lg p-6">
+                <div className="text-sm text-zinc-400 mb-2">Last Traded Price</div>
+                <div className="text-4xl font-bold text-green-500">
+                  ₹{quoteData.last_price?.toFixed(2) || '0.00'}
                 </div>
-              ))}
+                <div className="text-xs text-zinc-500 mt-2">
+                  Security ID: {quoteData.securityId} | Exchange: {quoteData.exchangeSegment}
+                </div>
+              </div>
             </div>
-            {quoteData.ticker_data && (
-              <div className="mt-6">
-                <h4 className="text-sm font-medium text-zinc-400 mb-2">Ticker Data</h4>
-                <div className="bg-zinc-900 rounded-lg p-4">
-                  <div className="text-3xl font-bold text-green-500">
-                    ₹{quoteData.ticker_data.lastPrice?.toFixed(2) || '0.00'}
+
+            {/* OHLC Data */}
+            {quoteData.ohlc && (
+              <div>
+                <h4 className="text-sm font-medium text-zinc-400 mb-3">OHLC (Open, High, Low, Close)</h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-zinc-900 rounded-lg p-4">
+                    <div className="text-sm text-zinc-400 mb-1">Open</div>
+                    <div className="text-lg font-semibold text-white">
+                      ₹{quoteData.ohlc.open?.toFixed(2) || '0.00'}
+                    </div>
                   </div>
-                  <div className="text-sm text-zinc-400 mt-2">
-                    Change: {quoteData.ticker_data.change?.toFixed(2) || '0.00'}
-                    ({quoteData.ticker_data.changePercent?.toFixed(2) || '0.00'}%)
+                  <div className="bg-zinc-900 rounded-lg p-4">
+                    <div className="text-sm text-zinc-400 mb-1">High</div>
+                    <div className="text-lg font-semibold text-green-400">
+                      ₹{quoteData.ohlc.high?.toFixed(2) || '0.00'}
+                    </div>
+                  </div>
+                  <div className="bg-zinc-900 rounded-lg p-4">
+                    <div className="text-sm text-zinc-400 mb-1">Low</div>
+                    <div className="text-lg font-semibold text-red-400">
+                      ₹{quoteData.ohlc.low?.toFixed(2) || '0.00'}
+                    </div>
+                  </div>
+                  <div className="bg-zinc-900 rounded-lg p-4">
+                    <div className="text-sm text-zinc-400 mb-1">Close</div>
+                    <div className="text-lg font-semibold text-white">
+                      ₹{quoteData.ohlc.close?.toFixed(2) || '0.00'}
+                    </div>
                   </div>
                 </div>
               </div>
