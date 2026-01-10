@@ -163,38 +163,53 @@ async def delete_file(file: FileDelete):
 
 
 # AI Chat endpoints
-async def generate_ollama_response(prompt: str, stream: bool = False):
-    """Generate response from Ollama"""
+async def generate_ollama_response_stream(prompt: str):
+    """Generate streaming response from Ollama"""
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OLLAMA_BASE_URL}/api/generate"
             payload = {
                 "model": OLLAMA_MODEL,
                 "prompt": prompt,
-                "stream": stream
+                "stream": True
             }
 
-            if stream:
-                async with client.stream("POST", url, json=payload) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        raise HTTPException(status_code=response.status_code, detail=error_text.decode())
-
-                    async for line in response.aiter_lines():
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                if "response" in data:
-                                    yield f"data: {json.dumps({'content': data['response'], 'done': data.get('done', False)})}\n\n"
-                                if data.get("done", False):
-                                    break
-                            except json.JSONDecodeError:
-                                continue
-            else:
-                response = await client.post(url, json=payload)
+            async with client.stream("POST", url, json=payload) as response:
                 if response.status_code != 200:
-                    raise HTTPException(status_code=response.status_code, detail=response.text)
-                return response.json()
+                    error_text = await response.aread()
+                    raise HTTPException(status_code=response.status_code, detail=error_text.decode())
+
+                async for line in response.aiter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            if "response" in data:
+                                yield f"data: {json.dumps({'content': data['response'], 'done': data.get('done', False)})}\n\n"
+                            if data.get("done", False):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Ollama is not running. Please start Ollama: ollama serve")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def generate_ollama_response(prompt: str):
+    """Generate non-streaming response from Ollama"""
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            url = f"{OLLAMA_BASE_URL}/api/generate"
+            payload = {
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False
+            }
+
+            response = await client.post(url, json=payload)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+            return response.json()
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="Ollama is not running. Please start Ollama: ollama serve")
     except Exception as e:
@@ -219,7 +234,7 @@ User question: {request.message}
 
 Provide a helpful, concise response with code examples when relevant."""
 
-        response = await generate_ollama_response(prompt, stream=False)
+        response = await generate_ollama_response(prompt)
         return {"response": response.get("response", "")}
     except HTTPException:
         raise
@@ -246,7 +261,7 @@ User question: {request.message}
 Provide a helpful, concise response with code examples when relevant."""
 
         return StreamingResponse(
-            generate_ollama_response(prompt, stream=True),
+            generate_ollama_response_stream(prompt),
             media_type="text/event-stream"
         )
     except HTTPException:
@@ -271,7 +286,7 @@ Requirements:
 
 Return ONLY the component code, no explanations."""
 
-        response = await generate_ollama_response(prompt, stream=False)
+        response = await generate_ollama_response(prompt)
         component_code = response.get("response", "")
 
         return {
@@ -301,7 +316,7 @@ Include:
 
 Return a JSON object with all these properties. Use a dark theme with violet/blue accents as default."""
 
-        response = await generate_ollama_response(prompt, stream=False)
+        response = await generate_ollama_response(prompt)
         design_system = response.get("response", "")
 
         # Try to extract JSON from response
