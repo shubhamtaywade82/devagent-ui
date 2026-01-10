@@ -30,11 +30,15 @@ db = Database()
 # AI Provider configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
-# OpenAI-compatible API (e.g., Open WebUI, vLLM, etc.)
+# OpenAI-compatible API (e.g., Open WebUI, vLLM, Ollama Router, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", None)  # e.g., "http://localhost:8080/v1"
 OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "nemesis-coder")
+# Ollama Router native endpoint (alternative to OpenAI-compatible)
+OLLAMA_ROUTER_BASE = os.getenv("OLLAMA_ROUTER_BASE", None)  # e.g., "http://localhost:8080"
 # Use OpenAI-compatible API if configured, otherwise fall back to Ollama
 USE_OPENAI_API = os.getenv("USE_OPENAI_API", "false").lower() == "true"
+# Use Ollama Router native endpoint (supports X-Task header for specialized tasks)
+USE_OLLAMA_ROUTER = os.getenv("USE_OLLAMA_ROUTER", "false").lower() == "true"
 
 
 # Request/Response Models
@@ -211,8 +215,24 @@ async def generate_openai_response_stream(prompt: str):
                                 if "choices" in data and len(data["choices"]) > 0:
                                     delta = data["choices"][0].get("delta", {})
                                     content = delta.get("content", "")
+
+                                    # Check for error patterns in content
                                     if content:
-                                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+                                        error_patterns = [
+                                            "[router error:",
+                                            "router error:",
+                                            "RuntimeError",
+                                            "error:",
+                                        ]
+                                        is_error = any(pattern.lower() in content.lower() for pattern in error_patterns)
+
+                                        if is_error:
+                                            error_msg = f"⚠️ API Error: {content.strip()}"
+                                            yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+                                            return
+                                        else:
+                                            yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+
                                     # Check if finished
                                     finish_reason = data["choices"][0].get("finish_reason")
                                     if finish_reason:
@@ -363,8 +383,24 @@ User question: {request.message}
 Provide a helpful, concise response with code examples when relevant."""
 
         if USE_OPENAI_API and OPENAI_API_BASE:
+            # OpenAI-compatible APIs often have issues with streaming (router errors)
+            # Use non-streaming and send as a single chunk for better reliability
+            async def non_streaming_wrapper():
+                try:
+                    response = await generate_openai_response(prompt)
+                    content = response.get("response", "")
+                    # Send content in chunks to simulate streaming
+                    chunk_size = 10
+                    for i in range(0, len(content), chunk_size):
+                        chunk = content[i:i + chunk_size]
+                        yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
+                    yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                except Exception as e:
+                    error_msg = f"⚠️ Error: {str(e)}"
+                    yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+
             return StreamingResponse(
-                generate_openai_response_stream(prompt),
+                non_streaming_wrapper(),
                 media_type="text/event-stream"
             )
         else:

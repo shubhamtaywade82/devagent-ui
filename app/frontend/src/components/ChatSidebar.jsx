@@ -73,14 +73,26 @@ function ChatSidebar({ projectId, files }) {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.substring(6));
-              assistantMessage += data.content || "";
+              const content = data.content || "";
+
+              // If it's an error, replace the message content
+              if (data.error) {
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1].content = content;
+                  return newMessages;
+                });
+                break;
+              }
+
+              assistantMessage += content;
               setMessages((prev) => {
                 const newMessages = [...prev];
                 newMessages[newMessages.length - 1].content = assistantMessage;
                 return newMessages;
               });
-              // Stop if we get an error or done flag
-              if (data.done || data.error) {
+              // Stop if we get a done flag
+              if (data.done) {
                 break;
               }
             } catch (e) {
