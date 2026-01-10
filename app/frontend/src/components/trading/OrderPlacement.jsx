@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ShoppingCart, CheckCircle, XCircle, Calculator } from 'lucide-react'
 import api from '../../services/api'
+import InstrumentSearch from './InstrumentSearch'
 
 function OrderPlacement({ accessToken }) {
   const [orderData, setOrderData] = useState({
@@ -19,6 +20,24 @@ function OrderPlacement({ accessToken }) {
   const [error, setError] = useState('')
   const [marginData, setMarginData] = useState(null)
   const [calculatingMargin, setCalculatingMargin] = useState(false)
+  const [selectedInstrument, setSelectedInstrument] = useState(null)
+
+  const handleInstrumentSelect = (instrument) => {
+    setSelectedInstrument(instrument)
+    if (instrument) {
+      setOrderData({
+        ...orderData,
+        security_id: instrument.securityId,
+        exchange_segment: instrument.exchangeSegment
+      })
+    } else {
+      setOrderData({
+        ...orderData,
+        security_id: '',
+        exchange_segment: 'NSE_EQ'
+      })
+    }
+  }
 
   const handleCalculateMargin = async () => {
     if (!orderData.security_id || !orderData.quantity || !orderData.price) {
@@ -86,6 +105,7 @@ function OrderPlacement({ accessToken }) {
           validity: 'DAY'
         })
         setMarginData(null)
+        setSelectedInstrument(null)
       } else {
         setError(response.error || 'Failed to place order')
       }
@@ -153,6 +173,22 @@ function OrderPlacement({ accessToken }) {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2 text-zinc-300">
+                Search Instrument
+              </label>
+              <InstrumentSearch
+                onSelect={handleInstrumentSelect}
+                placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
+              />
+              {selectedInstrument && (
+                <div className="mt-2 text-sm text-zinc-400">
+                  Selected: <span className="text-white font-medium">{selectedInstrument.displayName || selectedInstrument.symbolName}</span>
+                  {' '}(ID: {selectedInstrument.securityId}, {selectedInstrument.exchangeSegment})
+                </div>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-2 text-zinc-300">
@@ -162,7 +198,7 @@ function OrderPlacement({ accessToken }) {
                   type="text"
                   value={orderData.security_id}
                   onChange={(e) => setOrderData({...orderData, security_id: e.target.value})}
-                  placeholder="e.g., 1333"
+                  placeholder="Auto-filled from search or enter manually"
                   className="w-full px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white placeholder-zinc-500"
                   required
                 />
@@ -170,7 +206,7 @@ function OrderPlacement({ accessToken }) {
 
               <div>
                 <label className="block text-sm font-medium mb-2 text-zinc-300">
-                  Exchange
+                  Exchange Segment
                 </label>
                 <select
                   value={orderData.exchange_segment}

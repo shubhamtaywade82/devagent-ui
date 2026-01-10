@@ -2,31 +2,53 @@ import { useState } from "react";
 import { Search, TrendingUp } from "lucide-react";
 import api from "../../services/api";
 import RealTimeMarketFeed from "./RealTimeMarketFeed";
+import InstrumentSearch from "./InstrumentSearch";
 
 function MarketData({ accessToken }) {
-  const [searchSymbol, setSearchSymbol] = useState("");
+  const [selectedInstrument, setSelectedInstrument] = useState(null);
   const [quoteData, setQuoteData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!searchSymbol) return;
+  const handleInstrumentSelect = (instrument) => {
+    setSelectedInstrument(instrument);
+    if (instrument) {
+      fetchMarketQuote(instrument);
+    } else {
+      setQuoteData(null);
+    }
+  };
+
+  const fetchMarketQuote = async (instrument) => {
+    if (!instrument || !instrument.securityId) {
+      setError("Please select an instrument");
+      return;
+    }
 
     setLoading(true);
     setError("");
     try {
-      // Assuming security ID format - in real app, you'd search securities first
-      const securityId = parseInt(searchSymbol);
+      const securityId = parseInt(instrument.securityId);
       if (isNaN(securityId)) {
-        setError("Please enter a valid security ID");
+        setError("Invalid security ID");
         setLoading(false);
         return;
       }
 
+      // Map exchange segment to API format
+      const exchangeSegmentMap = {
+        NSE_EQ: "NSE_EQ",
+        BSE_EQ: "BSE_EQ",
+        NSE_FNO: "NSE_FNO",
+        BSE_FNO: "BSE_FNO",
+        MCX_COM: "MCX_COM",
+      };
+      const exchangeSegment =
+        exchangeSegmentMap[instrument.exchangeSegment] || "NSE_EQ";
+
       const response = await api.getMarketQuote({
         access_token: accessToken,
-        securities: { NSE_EQ: [securityId] },
+        securities: { [exchangeSegment]: [securityId] },
       });
 
       if (response.success) {
@@ -39,12 +61,12 @@ function MarketData({ accessToken }) {
         if (responseData?.data?.data) {
           const nestedData = responseData.data.data;
           // Find the first exchange segment and security
-          for (const exchangeSegment in nestedData) {
-            const securities = nestedData[exchangeSegment];
+          for (const seg in nestedData) {
+            const securities = nestedData[seg];
             for (const secId in securities) {
               quoteInfo = {
                 securityId: secId,
-                exchangeSegment: exchangeSegment,
+                exchangeSegment: seg,
                 ...securities[secId],
               };
               break;
@@ -77,23 +99,23 @@ function MarketData({ accessToken }) {
             <h2 className="text-2xl font-bold font-manrope">Market Data</h2>
           </div>
 
-          <form onSubmit={handleSearch} className="flex gap-2">
-            <input
-              type="text"
-              value={searchSymbol}
-              onChange={(e) => setSearchSymbol(e.target.value)}
-              placeholder="Enter Security ID (e.g., 1333 for HDFC Bank)"
-              className="flex-1 px-4 py-3 bg-zinc-900 border border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-white placeholder-zinc-500"
+          <div className="space-y-4">
+            <InstrumentSearch
+              onSelect={handleInstrumentSelect}
+              placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
             />
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              <Search className="w-5 h-5" />
-              {loading ? "Loading..." : "Search"}
-            </button>
-          </form>
+            {selectedInstrument && (
+              <div className="text-sm text-zinc-400">
+                Selected:{" "}
+                <span className="text-white font-medium">
+                  {selectedInstrument.displayName ||
+                    selectedInstrument.symbolName}
+                </span>{" "}
+                (ID: {selectedInstrument.securityId},{" "}
+                {selectedInstrument.exchangeSegment})
+              </div>
+            )}
+          </div>
 
           {error && (
             <div className="mt-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
@@ -160,10 +182,12 @@ function MarketData({ accessToken }) {
             </div>
 
             {/* Real-Time Market Feed */}
-            <RealTimeMarketFeed
-              accessToken={accessToken}
-              securityId={parseInt(searchSymbol)}
-            />
+            {selectedInstrument && (
+              <RealTimeMarketFeed
+                accessToken={accessToken}
+                securityId={parseInt(selectedInstrument.securityId)}
+              />
+            )}
           </>
         )}
 
