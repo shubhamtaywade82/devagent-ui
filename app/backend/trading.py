@@ -2,9 +2,13 @@
 Trading module for DhanHQ integration
 """
 from dhanhq import dhanhq
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Callable
 import os
 import httpx
+import asyncio
+import json
+import csv
+import io
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -317,6 +321,119 @@ class TradingService:
             return {"success": True, "data": ledger}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def create_market_feed(self, access_token: str, instruments: List[tuple], version: str = "v2"):
+        """Create Market Feed instance for real-time data"""
+        if not self.client_id:
+            raise ValueError("DHAN_CLIENT_ID is not configured")
+        try:
+            from dhanhq.marketfeed import DhanFeed
+            return DhanFeed((self.client_id, access_token), instruments, version)
+        except (ImportError, AttributeError) as e:
+            raise ImportError(f"Market Feed not available: {str(e)}")
+
+    def create_order_update(self, access_token: str):
+        """Create Order Update instance for real-time order status"""
+        if not self.client_id:
+            raise ValueError("DHAN_CLIENT_ID is not configured")
+        try:
+            from dhanhq.orderupdate import OrderSocket
+            return OrderSocket((self.client_id, access_token))
+        except (ImportError, AttributeError) as e:
+            raise ImportError(f"Order Updates not available: {str(e)}")
+
+    def create_full_depth(self, access_token: str, instruments: List[tuple]):
+        """Create Full Depth instance for 20-level market depth"""
+        if not self.client_id:
+            raise ValueError("DHAN_CLIENT_ID is not configured")
+        try:
+            from dhanhq import FullDepth
+            return FullDepth((self.client_id, access_token), instruments)
+        except (ImportError, AttributeError) as e:
+            raise ImportError(f"Full Depth not available: {str(e)}")
+
+    def get_instrument_list_csv(self, format_type: str = "compact") -> Dict[str, Any]:
+        """
+        Fetch instrument list from CSV endpoints
+
+        Args:
+            format_type: "compact" or "detailed"
+
+        Returns:
+            Dict with success status and parsed CSV data
+        """
+        try:
+            if format_type == "compact":
+                url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+            elif format_type == "detailed":
+                url = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
+            else:
+                return {"success": False, "error": "format_type must be 'compact' or 'detailed'"}
+
+            # Fetch CSV data
+            response = httpx.get(url, timeout=30.0)
+            response.raise_for_status()
+
+            # Parse CSV data
+            csv_text = response.text
+            csv_reader = csv.DictReader(io.StringIO(csv_text))
+            instruments = list(csv_reader)
+
+            return {
+                "success": True,
+                "data": {
+                    "instruments": instruments,
+                    "count": len(instruments),
+                    "format": format_type
+                }
+            }
+        except httpx.HTTPError as e:
+            return {"success": False, "error": f"HTTP error fetching instrument list: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error fetching instrument list: {str(e)}"}
+
+    def get_instrument_list_segmentwise(self, access_token: str, exchange_segment: str) -> Dict[str, Any]:
+        """
+        Fetch detailed instrument list for a particular exchange and segment
+
+        Args:
+            access_token: DhanHQ access token
+            exchange_segment: Exchange segment (e.g., "NSE_EQ", "BSE_EQ", "MCX_COM")
+
+        Returns:
+            Dict with success status and instrument list data
+        """
+        try:
+            if not self.client_id:
+                return {"success": False, "error": "DHAN_CLIENT_ID not configured"}
+
+            url = f"https://api.dhan.co/v2/instrument/{exchange_segment}"
+            headers = {
+                "access-token": access_token
+            }
+
+            # Fetch instrument list
+            response = httpx.get(url, headers=headers, timeout=30.0)
+            response.raise_for_status()
+
+            data = response.json()
+
+            return {
+                "success": True,
+                "data": {
+                    "instruments": data,
+                    "exchange_segment": exchange_segment,
+                    "count": len(data) if isinstance(data, list) else 0
+                }
+            }
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                return {"success": False, "error": "Invalid or expired access token"}
+            return {"success": False, "error": f"HTTP error: {e.response.status_code} - {e.response.text}"}
+        except httpx.HTTPError as e:
+            return {"success": False, "error": f"HTTP error fetching instrument list: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error fetching instrument list: {str(e)}"}
 
 # Global trading service instance
 trading_service = TradingService()

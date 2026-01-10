@@ -6,6 +6,7 @@ import OrderPlacement from '../components/trading/OrderPlacement'
 import PortfolioView from '../components/trading/PortfolioView'
 import MarketData from '../components/trading/MarketData'
 import TradingAuth from '../components/trading/TradingAuth'
+import LiveOrderUpdates from '../components/trading/LiveOrderUpdates'
 import api from '../services/api'
 
 function TradingPage() {
@@ -137,11 +138,20 @@ function TradingPage() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === 'dashboard' && <TradingDashboard accessToken={accessToken} />}
-        {activeTab === 'orders' && <OrderPlacement accessToken={accessToken} />}
-        {activeTab === 'portfolio' && <PortfolioView accessToken={accessToken} />}
-        {activeTab === 'market' && <MarketData accessToken={accessToken} />}
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 overflow-hidden">
+          {activeTab === 'dashboard' && <TradingDashboard accessToken={accessToken} />}
+          {activeTab === 'orders' && <OrderPlacement accessToken={accessToken} />}
+          {activeTab === 'portfolio' && <PortfolioView accessToken={accessToken} />}
+          {activeTab === 'market' && <MarketData accessToken={accessToken} />}
+        </div>
+
+        {/* Live Order Updates Sidebar */}
+        {isAuthenticated && (
+          <div className="w-80 border-l border-zinc-800 overflow-y-auto">
+            <LiveOrderUpdates accessToken={accessToken} />
+          </div>
+        )}
       </div>
     </div>
   )

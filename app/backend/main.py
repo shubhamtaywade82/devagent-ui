@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -7,6 +7,8 @@ import os
 from dotenv import load_dotenv
 import httpx
 import json
+import asyncio
+import threading
 
 from database import Database
 from models import Project, File, ChatMessage
@@ -158,6 +160,15 @@ class LedgerRequest(BaseModel):
     access_token: str
     from_date: Optional[str] = None
     to_date: Optional[str] = None
+
+
+class InstrumentListCSVRequest(BaseModel):
+    format_type: str = "compact"  # "compact" or "detailed"
+
+
+class InstrumentListSegmentwiseRequest(BaseModel):
+    access_token: str
+    exchange_segment: str  # e.g., "NSE_EQ", "BSE_EQ", "MCX_COM"
 
 
 # Health check
@@ -840,6 +851,30 @@ async def get_securities(request: TradingAuthRequest):
     return result
 
 
+@app.post("/api/trading/instruments/csv")
+async def get_instrument_list_csv(request: InstrumentListCSVRequest):
+    """Get instrument list from CSV endpoints (compact or detailed)"""
+    if request.format_type not in ["compact", "detailed"]:
+        raise HTTPException(status_code=400, detail="format_type must be 'compact' or 'detailed'")
+    result = trading_service.get_instrument_list_csv(request.format_type)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
+    return result
+
+
+@app.post("/api/trading/instruments/segmentwise")
+async def get_instrument_list_segmentwise(request: InstrumentListSegmentwiseRequest):
+    """Get detailed instrument list for a particular exchange and segment"""
+    if not request.access_token:
+        raise HTTPException(status_code=400, detail="Access token is required")
+    if not request.exchange_segment:
+        raise HTTPException(status_code=400, detail="Exchange segment is required")
+    result = trading_service.get_instrument_list_segmentwise(request.access_token, request.exchange_segment)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get instrument list"))
+    return result
+
+
 @app.post("/api/trading/expiry-list")
 async def get_expiry_list(request: OptionChainRequest):
     """Get expiry list for underlying"""
@@ -927,6 +962,196 @@ async def get_ledger(request: LedgerRequest):
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get ledger"))
     return result
+
+
+# WebSocket connections manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.market_feeds: Dict[str, Any] = {}
+        self.order_updates: Dict[str, Any] = {}
+        self.full_depths: Dict[str, Any] = {}
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def send_personal_message(self, message: dict, websocket: WebSocket):
+        try:
+            await websocket.send_json(message)
+        except:
+            self.disconnect(websocket)
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws/trading/market-feed/{access_token}")
+async def market_feed_websocket(websocket: WebSocket, access_token: str):
+    """WebSocket endpoint for real-time market feed"""
+    await manager.connect(websocket)
+    try:
+        # Receive subscription request
+        data = await websocket.receive_json()
+        instruments = data.get("instruments", [])
+        version = data.get("version", "v2")
+
+        # Create market feed instance
+        try:
+            market_feed = trading_service.create_market_feed(access_token, instruments, version)
+            manager.market_feeds[access_token] = market_feed
+
+            # Start market feed in background thread
+            def run_market_feed():
+                try:
+                    market_feed.run_forever()
+                except Exception as e:
+                    print(f"Market feed error: {e}")
+
+            feed_thread = threading.Thread(target=run_market_feed, daemon=True)
+            feed_thread.start()
+
+            # Send data to client
+            while True:
+                try:
+                    response = market_feed.get_data()
+                    if response:
+                        await manager.send_personal_message({
+                            "type": "market_feed",
+                            "data": response
+                        }, websocket)
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": str(e)
+                    }, websocket)
+                    break
+        except (ImportError, AttributeError) as e:
+            await manager.send_personal_message({
+                "type": "error",
+                "message": f"Market Feed not available: {str(e)}"
+            }, websocket)
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        if access_token in manager.market_feeds:
+            try:
+                if hasattr(manager.market_feeds[access_token], 'disconnect'):
+                    manager.market_feeds[access_token].disconnect()
+            except:
+                pass
+            del manager.market_feeds[access_token]
+
+
+@app.websocket("/ws/trading/order-updates/{access_token}")
+async def order_updates_websocket(websocket: WebSocket, access_token: str):
+    """WebSocket endpoint for real-time order updates"""
+    await manager.connect(websocket)
+    try:
+        # Create order update instance
+        try:
+            order_update = trading_service.create_order_update(access_token)
+            manager.order_updates[access_token] = order_update
+
+            # Callback for order updates
+            def on_order_update(order_data: dict):
+                asyncio.create_task(manager.send_personal_message({
+                    "type": "order_update",
+                    "data": order_data
+                }, websocket))
+
+            order_update.on_update = on_order_update
+
+            # Start order update in background thread
+            def run_order_update():
+                while True:
+                    try:
+                        order_update.connect_to_dhan_websocket_sync()
+                    except Exception as e:
+                        print(f"Order update error: {e}")
+                        import time
+                        time.sleep(5)
+
+            update_thread = threading.Thread(target=run_order_update, daemon=True)
+            update_thread.start()
+
+            # Keep connection alive
+            while True:
+                try:
+                    await websocket.receive_text()
+                except WebSocketDisconnect:
+                    break
+        except (ImportError, AttributeError) as e:
+            await manager.send_personal_message({
+                "type": "error",
+                "message": f"Order Updates not available: {str(e)}"
+            }, websocket)
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        if access_token in manager.order_updates:
+            del manager.order_updates[access_token]
+
+
+@app.websocket("/ws/trading/full-depth/{access_token}")
+async def full_depth_websocket(websocket: WebSocket, access_token: str):
+    """WebSocket endpoint for 20-level market depth"""
+    await manager.connect(websocket)
+    try:
+        # Receive subscription request
+        data = await websocket.receive_json()
+        instruments = data.get("instruments", [])
+
+        # Create full depth instance
+        try:
+            full_depth = trading_service.create_full_depth(access_token, instruments)
+            manager.full_depths[access_token] = full_depth
+
+            # Start full depth in background thread
+            def run_full_depth():
+                try:
+                    full_depth.run_forever()
+                except Exception as e:
+                    print(f"Full depth error: {e}")
+
+            depth_thread = threading.Thread(target=run_full_depth, daemon=True)
+            depth_thread.start()
+
+            # Send data to client
+            while True:
+                try:
+                    response = full_depth.get_data()
+                    if response:
+                        await manager.send_personal_message({
+                            "type": "full_depth",
+                            "data": response
+                        }, websocket)
+                    await asyncio.sleep(0.1)
+                except Exception as e:
+                    await manager.send_personal_message({
+                        "type": "error",
+                        "message": str(e)
+                    }, websocket)
+                    break
+        except (ImportError, AttributeError) as e:
+            await manager.send_personal_message({
+                "type": "error",
+                "message": f"Full Depth not available: {str(e)}"
+            }, websocket)
+
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        if access_token in manager.full_depths:
+            try:
+                if hasattr(manager.full_depths[access_token], 'disconnect'):
+                    manager.full_depths[access_token].disconnect()
+            except:
+                pass
+            del manager.full_depths[access_token]
 
 
 if __name__ == "__main__":

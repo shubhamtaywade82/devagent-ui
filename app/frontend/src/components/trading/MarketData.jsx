@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Search, TrendingUp } from 'lucide-react'
 import api from '../../services/api'
+import RealTimeMarketFeed from './RealTimeMarketFeed'
 
 function MarketData({ accessToken }) {
   const [searchSymbol, setSearchSymbol] = useState('')
@@ -102,8 +103,9 @@ function MarketData({ accessToken }) {
         </div>
 
         {quoteData && (
-          <div className="glass rounded-xl p-8">
-            <h3 className="text-lg font-semibold mb-4">Quote Data</h3>
+          <>
+            <div className="glass rounded-xl p-8 mb-6">
+              <h3 className="text-lg font-semibold mb-4">Quote Data</h3>
 
             {/* Last Price */}
             <div className="mb-6">
@@ -150,7 +152,14 @@ function MarketData({ accessToken }) {
                 </div>
               </div>
             )}
-          </div>
+            </div>
+
+            {/* Real-Time Market Feed */}
+            <RealTimeMarketFeed
+              accessToken={accessToken}
+              securityId={parseInt(searchSymbol)}
+            />
+          </>
         )}
 
         <div className="mt-6 glass rounded-xl p-8">

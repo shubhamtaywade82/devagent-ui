@@ -180,4 +180,19 @@ export default {
     const response = await api.post("/api/trading/expiry-list", data);
     return response.data;
   },
+
+  async getInstrumentListCSV(formatType = "compact") {
+    const response = await api.post("/api/trading/instruments/csv", {
+      format_type: formatType,
+    });
+    return response.data;
+  },
+
+  async getInstrumentListSegmentwise(accessToken, exchangeSegment) {
+    const response = await api.post("/api/trading/instruments/segmentwise", {
+      access_token: accessToken,
+      exchange_segment: exchangeSegment,
+    });
+    return response.data;
+  },
 };
