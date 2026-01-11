@@ -18,8 +18,13 @@ from tools import DHANHQ_TOOLS
 from tool_executor import execute_tool, get_access_token
 
 
-def format_market_quote_result(data):
-    """Format market quote data for LLM understanding"""
+def format_market_quote_result(data, instrument_name=None):
+    """Format market quote data for LLM understanding
+
+    Args:
+        data: Market quote data from API
+        instrument_name: Optional instrument name to use as fallback if symbol not found in quote data
+    """
     if not data:
         return "No market data available"
 
@@ -106,10 +111,14 @@ def format_market_quote_result(data):
         if not isinstance(ohlc_data, dict):
             ohlc_data = {}
 
+        # Try to get symbol from quote data, with fallback to instrument_name parameter
         symbol = (quote_data.get("symbol") or quote_data.get("SYMBOL") or
                  quote_data.get("tradingSymbol") or quote_data.get("TRADING_SYMBOL") or
                  quote_data.get("trading_symbol") or quote_data.get("name") or
-                 quote_data.get("NAME") or quote_data.get("instrumentName") or "N/A")
+                 quote_data.get("NAME") or quote_data.get("instrumentName") or
+                 quote_data.get("instrument_name") or quote_data.get("INSTRUMENT_NAME") or
+                 quote_data.get("display_name") or quote_data.get("DISPLAY_NAME") or
+                 instrument_name or "N/A")
 
         # LTP - try multiple variations
         ltp = (quote_data.get("LTP") or quote_data.get("ltp") or
@@ -142,10 +151,30 @@ def format_market_quote_result(data):
                 quote_data.get("previousClose") or quote_data.get("PREV_CLOSE") or
                 quote_data.get("prev_close") or quote_data.get("prevClose") or "N/A")
 
-        # Volume
-        volume = (quote_data.get("VOLUME") or quote_data.get("volume") or
-                 quote_data.get("totalVolume") or quote_data.get("TOTAL_VOLUME") or
-                 quote_data.get("total_volume") or quote_data.get("tradedVolume") or "N/A")
+        # Volume - try multiple variations, including checking if it's 0 or None
+        volume = None
+        for key in ["VOLUME", "volume", "totalVolume", "TOTAL_VOLUME", "total_volume",
+                   "tradedVolume", "TRADED_VOLUME", "VOL", "vol", "TURNOVER", "turnover"]:
+            val = quote_data.get(key)
+            if val is not None and val != "":
+                try:
+                    volume_val = float(val) if isinstance(val, (int, float, str)) and str(val).strip() else None
+                    if volume_val is not None and volume_val >= 0:  # Allow 0 as valid volume
+                        volume = volume_val
+                        break
+                except (ValueError, TypeError):
+                    continue
+        volume = volume if volume is not None else "N/A"
+
+        # Format volume if it's a number
+        if isinstance(volume, (int, float)):
+            # Format large numbers with commas
+            if volume >= 1000000:
+                volume = f"{volume/1000000:.2f}M"
+            elif volume >= 1000:
+                volume = f"{volume/1000:.2f}K"
+            else:
+                volume = f"{volume:.0f}"
 
         # Format numeric values properly
         def format_price(value):
@@ -773,6 +802,15 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                 if "tool_calls" in message and message["tool_calls"]:
                     # Execute function calls
                     tool_results = []
+                    # Track instrument name from search_instruments for use in get_market_quote
+                    instrument_name_from_search = None
+
+                    # Track tool calls for UI display
+                    tool_calls_metadata = []
+
+                    # Send initial planning step (if streaming)
+                    # Note: This is for non-streaming response, streaming happens in chat_stream
+
                     for tool_call in message["tool_calls"]:
                         function_name = tool_call["function"]["name"]
                         try:
@@ -780,27 +818,94 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         except json.JSONDecodeError:
                             function_args = {}
 
+                        # Format tool call details for user visibility
+                        tool_call_details = f"🔧 Using tool: **{function_name}**\n"
+                        if function_args:
+                            # Format arguments nicely, hiding sensitive data
+                            formatted_args = {}
+                            for key, value in function_args.items():
+                                if key == "access_token" or "token" in key.lower():
+                                    formatted_args[key] = "***"  # Hide tokens
+                                elif isinstance(value, dict) and len(str(value)) > 200:
+                                    formatted_args[key] = f"<dict with {len(value)} keys>"
+                                elif isinstance(value, list) and len(value) > 10:
+                                    formatted_args[key] = f"<list with {len(value)} items>"
+                                else:
+                                    formatted_args[key] = value
+                            tool_call_details += f"📋 Parameters: `{json.dumps(formatted_args, indent=2)}`\n"
+                        tool_call_details += "⏳ Executing...\n"
+
+                        # Store tool call metadata for UI
+                        tool_call_meta = {
+                            "tool": function_name,
+                            "args": formatted_args if function_args else {},
+                            "status": "executing",
+                            "timestamp": datetime.now().isoformat()
+                        }
+
                         # Execute the tool
                         result = await execute_tool(function_name, function_args, access_token)
+
+                        # Update tool call metadata with result
+                        tool_call_meta["status"] = "success" if result.get("success") else "error"
+                        tool_call_meta["result"] = result.get("error") if not result.get("success") else "Success"
+                        tool_calls_metadata.append(tool_call_meta)
 
                         # Format result for better LLM understanding
                         if isinstance(result, dict):
                             if result.get("success"):
                                 # Format successful result
                                 data = result.get("data", {})
-                                if function_name == "search_instruments":
+                                if function_name == "search_instruments" or function_name == "find_instrument":
                                     # Format search results nicely
                                     formatted_result = format_search_results(data)
-                                elif function_name == "get_market_quote":
-                                    # Format market quote data nicely
-                                    formatted_result = format_market_quote_result(data)
+                                    # Extract instrument name from search results for later use
+                                    if data.get("instruments") and len(data["instruments"]) > 0:
+                                        inst = data["instruments"][0]
+                                        instrument_name_from_search = (inst.get("display_name") or
+                                                                     inst.get("symbol_name") or
+                                                                     inst.get("trading_symbol") or
+                                                                     None)
+                                elif function_name == "get_market_quote" or function_name == "get_quote":
+                                    # Format market quote data nicely, using instrument name from search if available
+                                    formatted_result = format_market_quote_result(data, instrument_name=instrument_name_from_search)
+                                elif function_name == "analyze_market":
+                                    # Format market analysis result with trend information
+                                    if data.get("formatted_analysis"):
+                                        formatted_result = data["formatted_analysis"]
+                                    elif data.get("metrics"):
+                                        metrics = data["metrics"]
+                                        trend = metrics.get("trend", {})
+                                        if trend:
+                                            formatted_result = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\n{metrics.get('trend_summary', '')}"
+                                        else:
+                                            formatted_result = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\nHistorical data available but trend calculation failed."
+                                    else:
+                                        formatted_result = json.dumps(data, indent=2)
+                                elif function_name == "get_historical_data":
+                                    # Format historical data for trend analysis
+                                    if isinstance(data, list) and len(data) > 0:
+                                        # Show summary of historical data
+                                        first = data[0] if isinstance(data[0], dict) else {}
+                                        last = data[-1] if isinstance(data[-1], dict) else {}
+                                        first_close = first.get("close") or first.get("CLOSE") or "N/A"
+                                        last_close = last.get("close") or last.get("CLOSE") or "N/A"
+                                        formatted_result = f"Historical Data ({len(data)} data points):\nFirst Close: ₹{first_close}\nLast Close: ₹{last_close}"
+                                        if isinstance(first_close, (int, float)) and isinstance(last_close, (int, float)) and first_close > 0:
+                                            change = last_close - first_close
+                                            change_pct = (change / first_close) * 100
+                                            formatted_result += f"\nChange: ₹{change:.2f} ({change_pct:+.2f}%)\nDirection: {'📈 Upward' if change > 0 else '📉 Downward' if change < 0 else '➡️ Neutral'}"
+                                    else:
+                                        formatted_result = json.dumps(data, indent=2)
                                 elif function_name == "get_positions":
                                     formatted_result = format_positions_result(data)
                                 elif function_name == "get_holdings":
                                     formatted_result = format_holdings_result(data)
                                 else:
                                     formatted_result = json.dumps(data, indent=2)
-                                content = f"Tool executed successfully. Result:\n{formatted_result}"
+
+                                # Include tool call details in successful response
+                                content = f"{tool_call_details}✅ Success!\n\n{formatted_result}"
                             else:
                                 # Format error - include sample instruments if available
                                 error_msg = result.get("error", "Unknown error")
@@ -814,9 +919,10 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                         sample_text += f"  - {inst.get('symbol_name', 'N/A')} (underlying_symbol: {inst.get('underlying_symbol', 'N/A')}, security_id: {inst.get('security_id', 'N/A')})\n"
                                     error_msg += sample_text
 
-                                content = f"Tool execution failed: {error_msg}"
+                                # Include tool call details in error response
+                                content = f"{tool_call_details}❌ Error: {error_msg}"
                         else:
-                            content = json.dumps(result, indent=2)
+                            content = f"{tool_call_details}\n{json.dumps(result, indent=2)}"
 
                         tool_results.append({
                             "role": "tool",
@@ -839,7 +945,15 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         raise HTTPException(status_code=response.status_code, detail=response.text)
                     data = response.json()
                     if "choices" in data and len(data["choices"]) > 0:
-                        return {"response": data["choices"][0]["message"]["content"]}
+                        final_message = data["choices"][0]["message"]
+                        final_content = final_message.get("content", "")
+
+                        # Include tool calls metadata in response for UI display
+                        return {
+                            "response": final_content,
+                            "tool_calls": tool_calls_metadata if tool_calls_metadata else [],
+                            "reasoning": f"Used {len(tool_calls_metadata)} tool(s) to answer your question" if tool_calls_metadata else None
+                        }
 
                 # If no tool calls but tools were available and this is a trading query,
                 # the model might have ignored tools - try fallback extraction or force tool usage
@@ -872,6 +986,12 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         else:
                             error_msg = result.get("error", "Unknown error")
                             return {"response": f"Failed to fetch holdings: {error_msg}"}
+
+                    # If user asked about trend/analysis and no tool was called, force analyze_market
+                    trend_keywords = ["trend", "analysis", "performance", "movement", "direction", "how is", "how are"]
+                    if any(keyword in user_message for keyword in trend_keywords) and "tool_calls" not in message:
+                        print("Detected trend/analysis query but no tool call - will search and analyze")
+                        # This will be handled by the fallback code below that searches for instruments
 
                     # Try to extract get_market_quote call from code
                     match = re.search(r'get_market_quote\s*\(\s*({[^}]+})\s*\)', content, re.IGNORECASE)
@@ -921,27 +1041,75 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                     security_id = inst.get("security_id")
                                     exchange_segment = inst.get("exchange_segment")
 
-                                    if security_id and exchange_segment:
-                                        # Now fetch the market quote
-                                        quote_result = await execute_tool(
-                                            "get_market_quote",
-                                            {"securities": {exchange_segment: [security_id]}},
-                                            access_token
-                                        )
+                                    # Debug logging if fields are missing
+                                    if not security_id or not exchange_segment:
+                                        print(f"[chat] Warning: Missing fields in search result for {instrument_name}")
+                                        print(f"[chat] security_id: {security_id}, exchange_segment: {exchange_segment}")
+                                        print(f"[chat] Instrument keys: {list(inst.keys())}")
+                                        print(f"[chat] Full instrument data: {inst}")
 
-                                        if quote_result.get("success"):
-                                            formatted = format_market_quote_result(quote_result.get("data", {}))
-                                            symbol_name = inst.get("display_name") or inst.get("symbol_name") or instrument_name
-                                            return {"response": f"Here's the current {symbol_name} data:\n\n{formatted}"}
+                                    if security_id and exchange_segment:
+                                        # Check if this is a trend/analysis query
+                                        is_trend_query = any(keyword in user_message for keyword in ["trend", "analysis", "performance", "movement", "direction", "how is", "how are"])
+
+                                        if is_trend_query:
+                                            # Use analyze_market for trend analysis
+                                            analysis_result = await execute_tool(
+                                                "analyze_market",
+                                                {"security_id": security_id, "exchange_segment": exchange_segment, "days": 30},
+                                                access_token
+                                            )
+
+                                            if analysis_result.get("success"):
+                                                instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
+                                                data = analysis_result.get("data", {})
+
+                                                # Format the analysis result
+                                                if data.get("formatted_analysis"):
+                                                    formatted = data["formatted_analysis"]
+                                                elif data.get("metrics"):
+                                                    metrics = data["metrics"]
+                                                    trend = metrics.get("trend", {})
+                                                    if trend:
+                                                        formatted = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\n{metrics.get('trend_summary', '')}"
+                                                    else:
+                                                        formatted = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\nHistorical data available but trend calculation failed."
+                                                else:
+                                                    formatted = json.dumps(data, indent=2)
+
+                                                return {"response": f"Here's the trend analysis for {instrument_name_for_format}:\n\n{formatted}"}
+                                            else:
+                                                error_msg = analysis_result.get("error", "Unknown error")
+                                                return {"response": f"Found {instrument_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to analyze trend: {error_msg}"}
                                         else:
-                                            error_msg = quote_result.get("error", "Unknown error")
-                                            return {"response": f"Found {symbol_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to fetch market data: {error_msg}"}
+                                            # Regular price query - use get_market_quote
+                                            quote_result = await execute_tool(
+                                                "get_market_quote",
+                                                {"securities": {exchange_segment: [security_id]}},
+                                                access_token
+                                            )
+
+                                            if quote_result.get("success"):
+                                                # Pass instrument name to formatting function for better symbol extraction
+                                                instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
+                                                formatted = format_market_quote_result(quote_result.get("data", {}), instrument_name=instrument_name_for_format)
+                                                return {"response": f"Here's the current {instrument_name_for_format} data:\n\n{formatted}"}
+                                            else:
+                                                error_msg = quote_result.get("error", "Unknown error")
+                                                symbol_name = inst.get("display_name") or inst.get("symbol_name") or instrument_name
+                                                return {"response": f"Found {symbol_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to fetch market data: {error_msg}"}
                                     else:
                                         return {"response": f"Found {instrument_name} but missing security_id or exchange_segment in search results."}
                                 else:
                                     return {"response": f"Could not find {instrument_name} in the instrument database. Please check the spelling or try a different search term."}
                             else:
                                 error_msg = search_result.get("error", "Unknown error")
+                                # Add more context to error message
+                                error_detail = search_result.get("data", {}).get("error_detail", "")
+                                if error_detail:
+                                    error_msg = f"{error_msg}. Details: {error_detail}"
+                                print(f"[chat] Search failed for {instrument_name}: {error_msg}")
+                                print(f"[chat] Search result: {search_result}")
                                 return {"response": f"Failed to search for {instrument_name}: {error_msg}"}
 
                 return {"response": content}
@@ -1137,30 +1305,51 @@ Provide a helpful, concise response with code examples when relevant."""
 CRITICAL WORKFLOW:
 1. When users ask about stocks, indices, or instruments by NAME (e.g., "NIFTY", "HDFC Bank", "RELIANCE"):
    - FIRST: Call search_instruments with the name to find security_id and exchange_segment
-   - THEN: Use the returned security_id and exchange_segment for other operations (get_market_quote, get_historical_data, etc.)
+   - THEN: Use the returned security_id and exchange_segment for other operations (get_market_quote, get_historical_data, analyze_market, etc.)
 
-2. When users ask about prices, positions, market data, or portfolio information:
+2. When users ask about PRICES or CURRENT MARKET DATA:
+   - Call search_instruments first to get security_id and exchange_segment
+   - Then call get_market_quote with those values
+   - Present the actual price data
+
+3. When users ask about TRENDS, ANALYSIS, or HISTORICAL PERFORMANCE:
+   - Call search_instruments first to get security_id and exchange_segment
+   - Then call analyze_market OR get_historical_data to get trend information
+   - analyze_market provides comprehensive analysis (current price + historical trend)
+   - get_historical_data provides raw historical OHLCV data for custom analysis
+   - For indices (NIFTY, SENSEX), use exchange_segment="IDX_I" and instrument_type="INDEX"
+
+4. When users ask about positions, holdings, or portfolio:
    - Use the available tools to fetch real data
    - DO NOT generate Python code or pseudo-code - use the actual function calling tools
    - DO NOT ask users for more details - use the tools with the information you have
 
-3. Workflow example:
+5. Workflow examples:
    User: "What's the price of NIFTY?"
    Step 1: Call search_instruments(query="NIFTY", instrument_type="INDEX")
-   Step 2: Use the returned security_id and exchange_segment to call get_market_quote
+   Step 2: Use the returned security_id and exchange_segment="IDX_I" to call get_market_quote
    Step 3: Provide the actual price from the response
+
+   User: "What is the SENSEX trend?"
+   Step 1: Call search_instruments(query="SENSEX", instrument_type="INDEX")
+   Step 2: Use the returned security_id and exchange_segment="IDX_I" to call analyze_market
+   Step 3: Analyze the trend data and provide insights about direction (up/down/neutral) and percentage change
 
 Available tools:
 - search_instruments: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
 - get_market_quote: Get current prices (requires security_id and exchange_segment from search_instruments)
-- get_historical_data: Get price history (requires security_id and exchange_segment)
+- get_historical_data: Get price history for trend analysis (requires security_id, exchange_segment, instrument_type, from_date, to_date)
+- analyze_market: Comprehensive market analysis with trend (requires security_id and exchange_segment) - USE THIS FOR TREND QUERIES
 - get_positions: Get user's open positions
 - get_holdings: Get user's holdings
 - get_fund_limits: Get balance and margin
 - get_option_chain: Get options data (requires security_id and exchange_segment)
-- analyze_market: Comprehensive market analysis (requires security_id and exchange_segment)
 
-IMPORTANT: Always search for instruments first if the user mentions a stock/index by name, then use the search results for subsequent operations."""
+IMPORTANT:
+- Always search for instruments first if the user mentions a stock/index by name
+- For TREND queries, use analyze_market tool (it combines current price + historical data + trend analysis)
+- For indices (NIFTY, SENSEX), the exchange_segment will be "IDX_I" and instrument_type should be "INDEX"
+- Use the search results for all subsequent operations"""
                         })
                     messages_list.append({"role": "user", "content": request.message})
 
@@ -1171,12 +1360,23 @@ IMPORTANT: Always search for instruments first if the user mentions a stock/inde
                         access_token=access_token if is_trading_request else None
                     )
                     content = response.get("response", "")
+                    tool_calls = response.get("tool_calls", [])
+                    reasoning = response.get("reasoning", "")
+
+                    # Send tool calls metadata first (if any)
+                    if tool_calls and len(tool_calls) > 0:
+                        yield f"data: {json.dumps({'type': 'tool_calls', 'tool_calls': tool_calls, 'done': False})}\n\n"
+
+                    # Send reasoning if available
+                    if reasoning:
+                        yield f"data: {json.dumps({'type': 'reasoning', 'content': reasoning, 'done': False})}\n\n"
+
                     # Send content in chunks to simulate streaming
                     chunk_size = 10
                     for i in range(0, len(content), chunk_size):
                         chunk = content[i:i + chunk_size]
-                        yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
-                    yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                        yield f"data: {json.dumps({'type': 'content', 'content': chunk, 'done': False})}\n\n"
+                    yield f"data: {json.dumps({'type': 'content', 'content': '', 'done': True})}\n\n"
                 except Exception as e:
                     error_detail = str(e) if str(e) else repr(e)
                     if not error_detail:

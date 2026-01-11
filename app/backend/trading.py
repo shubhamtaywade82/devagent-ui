@@ -250,44 +250,128 @@ class TradingService:
             # Convert security_id to string (per official example: "1333" not 1333)
             security_id_str = str(security_id)
 
-            # Map exchange segment string to dhan constant if possible
+            # For historical data API, exchange_segment should be just the exchange name (NSE, BSE, MCX, NCDEX)
+            # Not the full segment like "NSE_EQ" or "IDX_I"
+            # Extract base exchange from exchange_segment
+            exchange_seg_str = exchange_segment.upper()
+
+            # Handle IDX_I (indices) - need to map to actual exchange (NSE or BSE)
+            # Common indices: NIFTY 50 (13) = NSE, SENSEX (51) = BSE
+            if exchange_seg_str == "IDX_I":
+                # Try to determine exchange from security_id
+                # NSE indices typically have lower IDs (e.g., 13 for NIFTY)
+                # BSE indices typically have higher IDs (e.g., 51 for SENSEX)
+                # Common NSE indices: 13 (NIFTY 50), 14 (NIFTY Bank), etc.
+                # Common BSE indices: 51 (SENSEX), etc.
+                if security_id in [13, 14, 15, 16, 17, 18, 19, 20]:  # Common NSE indices
+                    exchange_seg_str = "NSE"
+                elif security_id in [51, 52, 53, 54, 55]:  # Common BSE indices
+                    exchange_seg_str = "BSE"
+                else:
+                    # Default to NSE for unknown indices, but log a warning
+                    print(f"[get_historical_data] Unknown index security_id {security_id}, defaulting to NSE")
+                    exchange_seg_str = "NSE"
+            elif exchange_seg_str.startswith('NSE'):
+                # Extract "NSE" from "NSE_EQ", "NSE_FO", etc.
+                exchange_seg_str = "NSE"
+            elif exchange_seg_str.startswith('BSE'):
+                # Extract "BSE" from "BSE_EQ", "BSE_FO", etc.
+                exchange_seg_str = "BSE"
+            elif exchange_seg_str.startswith('MCX'):
+                # Extract "MCX" from "MCX_COM", etc.
+                exchange_seg_str = "MCX"
+            elif exchange_seg_str.startswith('NCDEX'):
+                # Extract "NCDEX" from "NCDEX_COM", etc.
+                exchange_seg_str = "NCDEX"
+
+            # Map exchange string to dhan constant if possible
             # Official example uses: dhan.NSE, dhan.BSE, etc.
+            # But we can also pass the string directly if constant not available
             exchange_constant = None
-            if hasattr(dhan, 'NSE') and exchange_segment.upper().startswith('NSE'):
+            if hasattr(dhan, 'NSE') and exchange_seg_str == 'NSE':
                 exchange_constant = dhan.NSE
-            elif hasattr(dhan, 'BSE') and exchange_segment.upper().startswith('BSE'):
+            elif hasattr(dhan, 'BSE') and exchange_seg_str == 'BSE':
                 exchange_constant = dhan.BSE
-            elif hasattr(dhan, 'MCX') and exchange_segment.upper().startswith('MCX'):
+            elif hasattr(dhan, 'MCX') and exchange_seg_str == 'MCX':
                 exchange_constant = dhan.MCX
-            elif hasattr(dhan, 'NCDEX') and exchange_segment.upper().startswith('NCDEX'):
+            elif hasattr(dhan, 'NCDEX') and exchange_seg_str == 'NCDEX':
                 exchange_constant = dhan.NCDEX
 
-            # Use constant if available, otherwise use original string
-            exchange_seg = exchange_constant if exchange_constant is not None else exchange_segment
+            # Use constant if available, otherwise use the base exchange string
+            # According to docs, exchange_segment should be like "NSE", "BSE" (string or constant)
+            exchange_seg = exchange_constant if exchange_constant is not None else exchange_seg_str
 
             # Fetch data based on interval type
-            if interval.lower() in ["daily", "day"]:
-                # Daily historical data (per official example)
-                data = dhan.historical_daily_data(
-                    security_id=security_id_str,
-                    exchange_segment=exchange_seg,
-                    instrument_type=instrument_type,
-                    from_date=from_date,
-                    to_date=to_date
-                )
-            else:
-                # Intraday minute data (per official example)
-                # Supports: "intraday", "minute", "intraday_minute"
-                data = dhan.intraday_minute_data(
-                    security_id=security_id_str,
-                    exchange_segment=exchange_seg,
-                    instrument_type=instrument_type,
-                    from_date=from_date,
-                    to_date=to_date
-                )
+            try:
+                if interval.lower() in ["daily", "day"]:
+                    # Daily historical data (per official example)
+                    print(f"[get_historical_data] Calling historical_daily_data with security_id={security_id_str}, exchange_seg={exchange_seg}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
+                    data = dhan.historical_daily_data(
+                        security_id=security_id_str,
+                        exchange_segment=exchange_seg,
+                        instrument_type=instrument_type,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
+                else:
+                    # Intraday minute data (per official example)
+                    # Supports: "intraday", "minute", "intraday_minute"
+                    print(f"[get_historical_data] Calling intraday_minute_data with security_id={security_id_str}, exchange_seg={exchange_seg}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
+                    data = dhan.intraday_minute_data(
+                        security_id=security_id_str,
+                        exchange_segment=exchange_seg,
+                        instrument_type=instrument_type,
+                        from_date=from_date,
+                        to_date=to_date
+                    )
 
-            return {"success": True, "data": data}
+                print(f"[get_historical_data] Success - data type: {type(data)}, length: {len(data) if isinstance(data, (list, dict)) else 'N/A'}")
+                return {"success": True, "data": data}
+            except Exception as api_error:
+                error_msg = str(api_error)
+                print(f"[get_historical_data] API call failed: {error_msg}")
+
+                # For indices (when original exchange_segment was IDX_I), try fallback to other exchange if first attempt failed
+                if exchange_segment.upper() == "IDX_I" and hasattr(dhan, 'NSE') and hasattr(dhan, 'BSE'):
+                    # Try the other exchange as fallback
+                    # If we tried NSE first, try BSE, and vice versa
+                    if exchange_seg_str == "NSE":
+                        fallback_exchange = dhan.BSE
+                        fallback_name = "BSE"
+                    elif exchange_seg_str == "BSE":
+                        fallback_exchange = dhan.NSE
+                        fallback_name = "NSE"
+                    else:
+                        fallback_exchange = None
+
+                    if fallback_exchange:
+                        print(f"[get_historical_data] Trying fallback exchange: {fallback_name}")
+                        try:
+                            if interval.lower() in ["daily", "day"]:
+                                data = dhan.historical_daily_data(
+                                    security_id=security_id_str,
+                                    exchange_segment=fallback_exchange,
+                                    instrument_type=instrument_type,
+                                    from_date=from_date,
+                                    to_date=to_date
+                                )
+                            else:
+                                data = dhan.intraday_minute_data(
+                                    security_id=security_id_str,
+                                    exchange_segment=fallback_exchange,
+                                    instrument_type=instrument_type,
+                                    from_date=from_date,
+                                    to_date=to_date
+                                )
+                            print(f"[get_historical_data] Fallback succeeded with {fallback_name}")
+                            return {"success": True, "data": data}
+                        except Exception as fallback_error:
+                            print(f"[get_historical_data] Fallback also failed: {str(fallback_error)}")
+                            return {"success": False, "error": f"Original error: {error_msg}. Fallback error: {str(fallback_error)}"}
+
+                return {"success": False, "error": error_msg}
         except Exception as e:
+            print(f"[get_historical_data] Outer exception: {str(e)}")
             return {"success": False, "error": str(e)}
 
     def get_security_list(self, access_token: str, format_type: str = "compact") -> Dict[str, Any]:

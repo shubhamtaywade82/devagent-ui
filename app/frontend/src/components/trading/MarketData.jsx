@@ -173,6 +173,14 @@ function MarketData({ accessToken }) {
                     </span>{" "}
                     (ID: {selectedInstrument.securityId},{" "}
                     {selectedInstrument.exchangeSegment})
+                    {selectedInstrument.underlyingSymbol && (
+                      <span className="ml-2 text-zinc-500">
+                        | Underlying:{" "}
+                        <span className="text-zinc-300">
+                          {selectedInstrument.underlyingSymbol}
+                        </span>
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <div className="text-red-400 bg-red-500/20 border border-red-500/50 rounded-lg p-3">
@@ -212,6 +220,9 @@ function MarketData({ accessToken }) {
                   <div className="text-xs text-zinc-500 mt-2">
                     Security ID: {quoteData.securityId} | Exchange:{" "}
                     {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
+                    {selectedInstrument?.underlyingSymbol && (
+                      <> | Underlying: <span className="text-zinc-400">{selectedInstrument.underlyingSymbol}</span></>
+                    )}
                   </div>
                 </div>
               </div>

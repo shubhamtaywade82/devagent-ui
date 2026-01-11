@@ -36,6 +36,10 @@ async def execute_tool(
     """
     Execute a tool/function call from Ollama/LLM agent
 
+    This function now routes to the new tool router system for tools that are
+    registered in the agent.tool_registry. Legacy tools are still supported
+    for backward compatibility.
+
     Args:
         function_name: Name of the function to execute
         function_args: Arguments for the function (from LLM)
@@ -44,6 +48,45 @@ async def execute_tool(
     Returns:
         Dict with function execution results
     """
+    # Try new tool router first
+    try:
+        try:
+            from agent.tool_router import execute_tool as router_execute_tool
+            from agent.tool_registry import get_tool
+        except ImportError:
+            from app.agent.tool_router import execute_tool as router_execute_tool
+            from app.agent.tool_registry import get_tool
+
+        # Check if tool exists in new registry
+        tool = get_tool(function_name)
+        if tool:
+            result = await router_execute_tool(function_name, function_args, access_token)
+            # Convert new format to legacy format for compatibility
+            if result.get("success") is False:
+                return result
+
+            # Convert new tool format to legacy format if needed
+            # Legacy format expects: {"success": True, "data": {...}}
+            # New format might be: {"success": True, "instruments": [...], "count": ...}
+            if "instruments" in result and "data" not in result:
+                # This is find_instrument tool - convert to legacy format
+                return {
+                    "success": True,
+                    "data": {
+                        "instruments": result.get("instruments", []),
+                        "count": result.get("count", 0)
+                    }
+                }
+
+            # If success is True or not present, return as-is
+            return result
+    except Exception as e:
+        # If new system fails, fall back to legacy
+        import traceback
+        print(f"[execute_tool] New tool router failed, falling back to legacy: {e}")
+        print(f"[execute_tool] Traceback: {traceback.format_exc()}")
+
+    # Fall back to legacy execution for backward compatibility
     # Use provided token or fallback to environment variable
     access_token = get_access_token(access_token)
 
@@ -205,6 +248,68 @@ async def find_instrument_by_segment(
                 display_name = display_name.upper().strip()
                 trading_symbol = trading_symbol.upper().strip()
 
+            # Get segment for filtering
+            segment = (inst.get("SEGMENT") or inst.get("SEM_SEGMENT") or "").upper()
+
+            # For equity segment searches, filter out non-equity instruments in contains matches
+            # This prevents ETFs, mutual funds, etc. from matching when searching for stocks
+            is_equity_segment = exchange_segment in ["NSE_EQ", "BSE_EQ"]
+            is_equity_instrument = inst_type in ["EQUITY", "EQ", ""] or segment == "E"
+
+            # Check for non-equity instruments by type and symbol patterns
+            # ETFs and mutual funds often have patterns like "HDFCNEXT50", "HDFCAMC", etc.
+            underlying_upper = underlying_symbol.upper()
+            symbol_upper = symbol_name.upper()
+            display_upper = display_name.upper()
+
+            is_etf = inst_type in ["ETF"] or "ETF" in symbol_upper or "ETF" in display_upper
+            is_mutual_fund = inst_type in ["MUTUAL_FUND", "MF"] or "AMC" in symbol_upper or "AMC" in display_upper or "MUTUAL" in symbol_upper
+            is_debt = inst_type in ["DEBT", "BOND"]
+            is_commodity = inst_type in ["COMMODITY", "CURRENCY"]
+
+            # Also check for common patterns: if underlying_symbol contains numbers/patterns typical of ETFs/MFs
+            # e.g., "HDFCNEXT50", "HDFC1406DD" - these are likely ETFs/MFs, not stocks
+            # Patterns that indicate ETFs/MFs:
+            # - Contains "NEXT", "NIF", "SENSEX", "BSE", "SML", "MID" (index-related)
+            # - Ends with numbers (like "HDFC1406DD", "HDFCNEXT50")
+            # - Contains "AMC" (Asset Management Company)
+            # - Has numbers in the middle or end (like "HDFC1406DD")
+            has_etf_pattern = False
+            if len(underlying_upper) > 6:
+                # Check for index-related keywords
+                if any(keyword in underlying_upper for keyword in ["NEXT", "NIF", "SENSEX", "BSE", "SML", "MID", "NIFTY"]):
+                    has_etf_pattern = True
+                # Check if it ends with numbers (common in ETF symbols)
+                elif any(c.isdigit() for c in underlying_upper[-4:]):
+                    has_etf_pattern = True
+                # Check if it has numbers in the middle (like "HDFC1406DD")
+                elif len([c for c in underlying_upper if c.isdigit()]) >= 2:
+                    has_etf_pattern = True
+
+            # If it has ETF pattern, it's definitely not a regular stock
+            # Even if instrument_type says "EQUITY", if it has ETF patterns, treat it as non-equity
+            is_non_equity = (
+                is_etf or
+                is_mutual_fund or
+                is_debt or
+                is_commodity or
+                has_etf_pattern  # If it has ETF pattern, exclude it regardless of instrument type
+            )
+
+            # For equity segment searches, we want ONLY pure equity stocks
+            # Skip any instrument that looks like ETF/MF even if instrument_type is ambiguous
+            if collect_contains and is_equity_segment:
+                if is_non_equity:
+                    print(f"Skipping non-equity instrument: {underlying_symbol} (Type: {inst_type}, Pattern: {has_etf_pattern}, ETF: {is_etf}, MF: {is_mutual_fund})")
+                    return None
+                # Also skip if it's not clearly an equity instrument (when we're searching for stocks)
+                # This ensures we only get actual stocks, not ETFs/MFs that might be misclassified
+                if not is_equity_instrument and not is_non_equity:
+                    # If instrument type is ambiguous but has ETF-like patterns, skip it
+                    if has_etf_pattern:
+                        print(f"Skipping ambiguous instrument with ETF pattern: {underlying_symbol} (Type: {inst_type})")
+                        return None
+
             match_priority = None
             match_field = None
 
@@ -223,29 +328,43 @@ async def find_instrument_by_segment(
                 print(f"Found EXACT match by display_name: {inst.get('DISPLAY_NAME')}")
             # Only check contains matches if collect_contains is True
             elif collect_contains and not exact_match:
+                # For equity segments, prioritize equity instruments
                 if underlying_symbol and search_symbol in underlying_symbol:
-                    match_priority = 4
+                    # Boost priority if it's an equity instrument in equity segment
+                    base_priority = 4
+                    if is_equity_segment and is_equity_instrument:
+                        base_priority = 3.5  # Higher priority than non-equity
+                    match_priority = base_priority
                     match_field = "underlying_symbol"
-                    print(f"Found CONTAINS match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')}")
+                    print(f"Found CONTAINS match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')} (Type: {inst_type})")
                 elif symbol_name and search_symbol in symbol_name:
-                    match_priority = 5
+                    base_priority = 5
+                    if is_equity_segment and is_equity_instrument:
+                        base_priority = 4.5
+                    match_priority = base_priority
                     match_field = "symbol_name"
-                    print(f"Found CONTAINS match by symbol_name: {inst.get('SYMBOL_NAME')}")
+                    print(f"Found CONTAINS match by symbol_name: {inst.get('SYMBOL_NAME')} (Type: {inst_type})")
                 elif display_name and search_symbol in display_name:
-                    match_priority = 6
+                    base_priority = 6
+                    if is_equity_segment and is_equity_instrument:
+                        base_priority = 5.5
+                    match_priority = base_priority
                     match_field = "display_name"
-                    print(f"Found CONTAINS match by display_name: {inst.get('DISPLAY_NAME')}")
+                    print(f"Found CONTAINS match by display_name: {inst.get('DISPLAY_NAME')} (Type: {inst_type})")
                 elif trading_symbol and search_symbol in trading_symbol:
-                    match_priority = 7
+                    base_priority = 7
+                    if is_equity_segment and is_equity_instrument:
+                        base_priority = 6.5
+                    match_priority = base_priority
                     match_field = "trading_symbol"
-                    print(f"Found CONTAINS match by trading_symbol: {trading_symbol}")
+                    print(f"Found CONTAINS match by trading_symbol: {trading_symbol} (Type: {inst_type})")
 
             if match_priority is None:
                 return None
 
             security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
             exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
-            segment = inst.get("SEGMENT") or inst.get("SEM_SEGMENT") or ""
+            # segment already defined above
 
             # Map exchange segment correctly - ensure indices use IDX_I
             final_exchange_segment = exchange_segment
@@ -699,16 +818,26 @@ async def analyze_market_composite(
             {exchange_segment: [security_id]}
         )
 
+        # Determine instrument type based on exchange segment
+        # IDX_I is for indices, others are typically EQUITY
+        instrument_type = "INDEX" if exchange_segment == "IDX_I" else "EQUITY"
+
         # Get historical data
+        print(f"[analyze_market] Fetching historical data for security_id={security_id}, exchange_segment={exchange_segment}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
         historical_result = trading_service.get_historical_data(
             access_token,
             security_id,
             exchange_segment,
-            "EQUITY",  # Default to EQUITY, could be made configurable
+            instrument_type,
             from_date,
             to_date,
             "daily"
         )
+
+        if not historical_result.get("success"):
+            print(f"[analyze_market] Historical data fetch failed: {historical_result.get('error')}")
+        else:
+            print(f"[analyze_market] Historical data fetch succeeded")
 
         # Combine results
         analysis = {
@@ -726,37 +855,157 @@ async def analyze_market_composite(
             }
         }
 
-        # Add basic analysis if data is available
-        if quote_result.get("success") and historical_result.get("success"):
-            quote_data = quote_result.get("data", {})
-            historical_data = historical_result.get("data", {})
+        # Add basic analysis if data is available (try to use whatever data we have)
+        # Even if one fails, we can still provide partial analysis
+        quote_available = quote_result.get("success")
+        historical_available = historical_result.get("success")
 
-            # Extract key metrics
+        print(f"[analyze_market] Quote result success: {quote_available}, Historical result success: {historical_available}")
+
+        if quote_available or historical_available:
+            quote_data_raw = quote_result.get("data", {}) if quote_available else {}
+            historical_data = historical_result.get("data", {}) if historical_available else {}
+
+            # Extract quote data from nested structure (same as format_market_quote_result)
+            quote_data = None
+            print(f"[analyze_market] Extracting quote data from structure, exchange_segment: {exchange_segment}")
+
+            if isinstance(quote_data_raw, dict):
+                # Try nested structure: data.data.data.{exchange_segment}.{security_id}
+                if "data" in quote_data_raw and isinstance(quote_data_raw["data"], dict):
+                    if "data" in quote_data_raw["data"]:
+                        nested_data = quote_data_raw["data"]["data"]
+                        print(f"[analyze_market] Nested data keys: {list(nested_data.keys()) if isinstance(nested_data, dict) else 'not a dict'}")
+                        for exchange_seg in [exchange_segment, "IDX_I", "NSE_IDX", "BSE_IDX", "NSE_EQ", "BSE_EQ"]:
+                            if exchange_seg in nested_data:
+                                securities = nested_data[exchange_seg]
+                                print(f"[analyze_market] Found segment {exchange_seg}, securities type: {type(securities)}")
+                                if isinstance(securities, dict):
+                                    print(f"[analyze_market] Security IDs in {exchange_seg}: {list(securities.keys())}")
+                                    for sec_id, quote_info in securities.items():
+                                        if isinstance(quote_info, dict) and quote_info:
+                                            quote_data = quote_info
+                                            print(f"[analyze_market] Found quote data for security_id {sec_id}, keys: {list(quote_data.keys())}")
+                                            break
+                                    if quote_data:
+                                        break
+                # If not found, try direct access
+                if not quote_data and any(key in quote_data_raw for key in ["LTP", "ltp", "lastPrice", "OPEN", "open"]):
+                    quote_data = quote_data_raw
+                    print(f"[analyze_market] Using quote_data_raw as flat structure")
+
+            # Extract key metrics with more field variations
             current_price = None
             if quote_data and isinstance(quote_data, dict):
-                # Extract LTP or close price from quote
-                current_price = quote_data.get("LTP") or quote_data.get("close") or quote_data.get("lastPrice")
+                # Try multiple field name variations
+                current_price = (quote_data.get("LTP") or quote_data.get("ltp") or
+                               quote_data.get("lastPrice") or quote_data.get("LAST_PRICE") or
+                               quote_data.get("last_price") or quote_data.get("last_traded_price") or
+                               quote_data.get("currentPrice") or quote_data.get("CURRENT_PRICE") or
+                               quote_data.get("close") or quote_data.get("CLOSE"))
+
+                # Convert to float if it's a string
+                if current_price and isinstance(current_price, str):
+                    try:
+                        current_price = float(current_price)
+                    except (ValueError, TypeError):
+                        current_price = None
+
+                print(f"[analyze_market] Extracted current_price: {current_price}")
 
             # Calculate trend if historical data available
             trend = None
-            if historical_data and isinstance(historical_data, list) and len(historical_data) > 0:
-                # Get first and last close prices
-                first_close = historical_data[0].get("close") if isinstance(historical_data[0], dict) else None
-                last_close = historical_data[-1].get("close") if isinstance(historical_data[-1], dict) else None
+            trend_summary = ""
+            print(f"[analyze_market] Historical data type: {type(historical_data)}, length: {len(historical_data) if isinstance(historical_data, (list, dict)) else 'N/A'}")
 
-                if first_close and last_close:
-                    change = last_close - first_close
-                    change_pct = (change / first_close) * 100 if first_close > 0 else 0
-                    trend = {
-                        "change": change,
-                        "change_percent": round(change_pct, 2),
-                        "direction": "up" if change > 0 else "down" if change < 0 else "neutral"
-                    }
+            if historical_data:
+                # Handle different historical data structures
+                historical_list = None
+                if isinstance(historical_data, list):
+                    historical_list = historical_data
+                elif isinstance(historical_data, dict):
+                    # Might be wrapped in a dict, try to extract list
+                    historical_list = historical_data.get("data") or historical_data.get("historical") or []
+                    if not isinstance(historical_list, list):
+                        historical_list = []
+
+                if historical_list and len(historical_list) > 0:
+                    print(f"[analyze_market] Processing {len(historical_list)} historical data points")
+                    # Get first and last close prices
+                    first_close = None
+                    last_close = None
+
+                    # Try to get close prices from historical data with multiple field name variations
+                    for item in historical_list:
+                        if isinstance(item, dict):
+                            # Try multiple field name variations for close price
+                            close_val = (item.get("close") or item.get("CLOSE") or item.get("Close") or
+                                       item.get("ClosePrice") or item.get("CLOSE_PRICE") or
+                                       item.get("close_price") or item.get("c") or item.get("C"))
+
+                            if close_val is not None and close_val != "":
+                                try:
+                                    close_float = float(close_val) if isinstance(close_val, (int, float, str)) else None
+                                    if close_float is not None:
+                                        if first_close is None:
+                                            first_close = close_float
+                                        last_close = close_float
+                                except (ValueError, TypeError):
+                                    continue
+
+                    print(f"[analyze_market] First close: {first_close}, Last close: {last_close}")
+
+                    # Use last_close as current_price if current_price is None
+                    if current_price is None and last_close:
+                        current_price = last_close
+                        print(f"[analyze_market] Using last_close as current_price: {current_price}")
+
+                    if first_close and last_close and first_close > 0:
+                        change = last_close - first_close
+                        change_pct = (change / first_close) * 100
+                        direction = "up" if change > 0 else "down" if change < 0 else "neutral"
+
+                        trend = {
+                            "change": round(change, 2),
+                            "change_percent": round(change_pct, 2),
+                            "direction": direction,
+                            "first_price": round(first_close, 2),
+                            "last_price": round(last_close, 2),
+                            "days_analyzed": days
+                        }
+
+                        # Create human-readable trend summary
+                        trend_summary = f"Trend Analysis ({days} days):\n"
+                        trend_summary += f"- Starting Price: ₹{trend['first_price']}\n"
+                        trend_summary += f"- Current Price: ₹{current_price or trend['last_price']}\n"
+                        trend_summary += f"- Change: ₹{trend['change']} ({trend['change_percent']:+.2f}%)\n"
+                        trend_summary += f"- Direction: {'📈 Upward' if direction == 'up' else '📉 Downward' if direction == 'down' else '➡️ Neutral'}"
+                    else:
+                        print(f"[analyze_market] Trend calculation failed - first_close: {first_close}, last_close: {last_close}")
+                        # If we have historical data but can't calculate trend, at least show we have data
+                        if historical_list:
+                            trend_summary = f"Historical data available ({len(historical_list)} data points) but could not extract close prices for trend calculation. Available keys in first item: {list(historical_list[0].keys()) if historical_list and isinstance(historical_list[0], dict) else 'N/A'}"
+                else:
+                    print(f"[analyze_market] No historical data available or empty list")
+                    if not quote_result.get("success"):
+                        trend_summary = f"Failed to fetch current quote data: {quote_result.get('error', 'Unknown error')}"
+                    elif not historical_result.get("success"):
+                        trend_summary = f"Failed to fetch historical data: {historical_result.get('error', 'Unknown error')}"
+                    else:
+                        trend_summary = "Historical data not available for trend analysis."
 
             analysis["data"]["metrics"] = {
                 "current_price": current_price,
-                "trend": trend
+                "trend": trend,
+                "trend_summary": trend_summary
             }
+
+            # Add formatted summary for LLM
+            if trend_summary:
+                analysis["data"]["formatted_analysis"] = trend_summary
+            elif current_price:
+                # At least show current price if available
+                analysis["data"]["formatted_analysis"] = f"Current Price: ₹{current_price}\n\nHistorical data not available for trend analysis."
 
         return analysis
 

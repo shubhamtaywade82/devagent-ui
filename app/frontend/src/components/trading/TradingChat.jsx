@@ -7,13 +7,19 @@ import {
   Loader,
   TrendingUp,
   MessageSquare,
+  Activity,
 } from "lucide-react";
+import ExecutionFlowSidebar from "./ExecutionFlowSidebar";
 
 function TradingChat({ accessToken }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [currentToolCalls, setCurrentToolCalls] = useState([]);
+  const [currentReasoning, setCurrentReasoning] = useState("");
+  const [executionSteps, setExecutionSteps] = useState([]);
+  const [showSidebar, setShowSidebar] = useState(true);
   const messagesEndRef = useRef(null);
   const abortControllerRef = useRef(null);
 
@@ -80,7 +86,22 @@ function TradingChat({ accessToken }) {
       let assistantMessage = "";
       let hasError = false;
 
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      // Reset tool calls, reasoning, and execution steps for new message
+      setCurrentToolCalls([]);
+      setCurrentReasoning("");
+      setExecutionSteps([]);
+
+      setMessages((prev) => [...prev, { role: "assistant", content: "", toolCalls: [], reasoning: "" }]);
+
+      // Add initial planning step
+      setExecutionSteps([{
+        id: Date.now(),
+        type: "planning",
+        status: "active",
+        title: "Analyzing request",
+        description: "Understanding your query and planning the approach...",
+        timestamp: new Date().toISOString()
+      }]);
 
       while (true) {
         const { done, value } = await reader.read();
@@ -93,6 +114,70 @@ function TradingChat({ accessToken }) {
           if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.substring(6));
+
+              // Handle different message types
+              if (data.type === "tool_calls" && data.tool_calls) {
+                setCurrentToolCalls(data.tool_calls);
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1].toolCalls = data.tool_calls;
+                  return newMessages;
+                });
+
+                // Update execution steps with tool calls
+                setExecutionSteps((prev) => {
+                  const newSteps = [...prev];
+                  // Mark planning as complete
+                  const planningStep = newSteps.find(s => s.type === "planning");
+                  if (planningStep) {
+                    planningStep.status = "completed";
+                  }
+
+                  // Add tool execution steps
+                  data.tool_calls.forEach((toolCall, index) => {
+                    newSteps.push({
+                      id: Date.now() + index,
+                      type: "tool",
+                      status: toolCall.status === "success" ? "completed" : toolCall.status === "error" ? "error" : "active",
+                      title: `Executing: ${toolCall.tool}`,
+                      description: toolCall.status === "success" ? "Tool executed successfully" : toolCall.status === "error" ? toolCall.result : "Running tool...",
+                      tool: toolCall.tool,
+                      args: toolCall.args,
+                      result: toolCall.result,
+                      timestamp: toolCall.timestamp || new Date().toISOString()
+                    });
+                  });
+
+                  return newSteps;
+                });
+                continue;
+              }
+
+              if (data.type === "reasoning" && data.content) {
+                setCurrentReasoning(data.content);
+                setMessages((prev) => {
+                  const newMessages = [...prev];
+                  newMessages[newMessages.length - 1].reasoning = data.content;
+                  return newMessages;
+                });
+
+                // Update execution steps with reasoning
+                setExecutionSteps((prev) => {
+                  const newSteps = [...prev];
+                  newSteps.push({
+                    id: Date.now(),
+                    type: "reasoning",
+                    status: "completed",
+                    title: "Reasoning",
+                    description: data.content,
+                    timestamp: new Date().toISOString()
+                  });
+                  return newSteps;
+                });
+                continue;
+              }
+
+              // Handle content
               const content = data.content || "";
 
               // If it's an error, replace the message content
@@ -115,8 +200,36 @@ function TradingChat({ accessToken }) {
                 newMessages[newMessages.length - 1].content = assistantMessage;
                 return newMessages;
               });
+
+              // Add final response step when content starts coming
+              if (assistantMessage.length === content.length && content.length > 0) {
+                // First chunk of content - add response generation step
+                setExecutionSteps((prev) => {
+                  const hasResponseStep = prev.some(s => s.type === "response");
+                  if (!hasResponseStep) {
+                    return [...prev, {
+                      id: Date.now(),
+                      type: "response",
+                      status: "active",
+                      title: "Generating response",
+                      description: "Formulating the final answer...",
+                      timestamp: new Date().toISOString()
+                    }];
+                  }
+                  return prev;
+                });
+              }
+
               // Stop if we get a done flag
               if (data.done) {
+                // Mark response step as completed
+                setExecutionSteps((prev) => {
+                  return prev.map(step =>
+                    step.type === "response" && step.status === "active"
+                      ? { ...step, status: "completed", description: "Response generated successfully" }
+                      : step
+                  );
+                });
                 break;
               }
             } catch (e) {
@@ -196,18 +309,27 @@ function TradingChat({ accessToken }) {
   ];
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900/50">
-      <div className="p-4 border-b border-zinc-800">
-        <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
-          <TrendingUp className="w-4 h-4 text-green-500" />
-          Trading Assistant
-        </h2>
-        <p className="text-xs text-zinc-500 mt-1">
-          Ask about markets, positions, or get trading insights
-        </p>
-      </div>
+    <div className="h-full flex bg-zinc-900/50">
+      {/* Left Sidebar - Execution Flow (Separate Component) */}
+      <ExecutionFlowSidebar
+        executionSteps={executionSteps}
+        showSidebar={showSidebar}
+        onToggle={() => setShowSidebar(!showSidebar)}
+      />
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col bg-zinc-900/50">
+        <div className="p-4 border-b border-zinc-800">
+          <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-green-500" />
+            Trading Assistant
+          </h2>
+          <p className="text-xs text-zinc-500 mt-1">
+            Ask about markets, positions, or get trading insights
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="text-center text-zinc-500 text-sm mt-8">
             <Bot className="w-12 h-12 mx-auto mb-4 text-zinc-600" />
@@ -236,44 +358,105 @@ function TradingChat({ accessToken }) {
 
         <AnimatePresence>
           {messages.map((message, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`flex gap-3 ${
-                message.role === "user" ? "justify-end" : "justify-start"
-              }`}
-            >
-              {message.role === "assistant" && (
-                <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-4 h-4 text-green-500" />
-                </div>
-              )}
-              <div
-                className={`max-w-[85%] rounded-lg px-4 py-2 ${
-                  message.role === "user"
-                    ? "bg-green-600 text-white"
-                    : "bg-zinc-800 text-zinc-200"
+            <div key={index} className="flex flex-col gap-2">
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex gap-3 ${
+                  message.role === "user" ? "justify-end" : "justify-start"
                 }`}
               >
-                <div className="text-sm whitespace-pre-wrap break-words">
-                  {message.content ||
-                    (loading && index === messages.length - 1 ? (
-                      <div className="flex items-center gap-2">
-                        <Loader className="w-4 h-4 animate-spin" />
-                        <span>Analyzing...</span>
+                {message.role === "assistant" && (
+                  <div className="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                    <Bot className="w-4 h-4 text-green-500" />
+                  </div>
+                )}
+                <div
+                  className={`max-w-[85%] rounded-lg px-4 py-2 ${
+                    message.role === "user"
+                      ? "bg-green-600 text-white"
+                      : "bg-zinc-800 text-zinc-200"
+                  }`}
+                >
+                  {/* Show reasoning if available */}
+                  {message.reasoning && (
+                    <div className="mb-2 pb-2 border-b border-zinc-700">
+                      <div className="text-xs text-zinc-400 flex items-center gap-1 mb-1">
+                        <TrendingUp className="w-3 h-3" />
+                        <span className="font-medium">Reasoning</span>
                       </div>
-                    ) : (
-                      ""
-                    ))}
+                      <div className="text-xs text-zinc-300">{message.reasoning}</div>
+                    </div>
+                  )}
+
+                  {/* Show tool calls if available */}
+                  {message.toolCalls && message.toolCalls.length > 0 && (
+                    <div className="mb-2 pb-2 border-b border-zinc-700">
+                      <div className="text-xs text-zinc-400 flex items-center gap-1 mb-2">
+                        <MessageSquare className="w-3 h-3" />
+                        <span className="font-medium">Tools Used ({message.toolCalls.length})</span>
+                      </div>
+                      <div className="space-y-2">
+                        {message.toolCalls.map((toolCall, toolIndex) => (
+                          <div
+                            key={toolIndex}
+                            className={`text-xs p-2 rounded border ${
+                              toolCall.status === "success"
+                                ? "bg-green-500/10 border-green-500/30 text-green-300"
+                                : toolCall.status === "error"
+                                ? "bg-red-500/10 border-red-500/30 text-red-300"
+                                : "bg-yellow-500/10 border-yellow-500/30 text-yellow-300"
+                            }`}
+                          >
+                            <div className="font-medium mb-1">
+                              {toolCall.status === "success" && "✅ "}
+                              {toolCall.status === "error" && "❌ "}
+                              {toolCall.status === "executing" && "⏳ "}
+                              {toolCall.tool}
+                            </div>
+                            {Object.keys(toolCall.args || {}).length > 0 && (
+                              <div className="text-zinc-400 mt-1">
+                                <details className="cursor-pointer">
+                                  <summary className="text-zinc-500 hover:text-zinc-300">
+                                    Parameters
+                                  </summary>
+                                  <pre className="mt-1 text-[10px] overflow-x-auto">
+                                    {JSON.stringify(toolCall.args, null, 2)}
+                                  </pre>
+                                </details>
+                              </div>
+                            )}
+                            {toolCall.result && (
+                              <div className="text-zinc-400 mt-1 text-[10px]">
+                                {toolCall.result}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Message content */}
+                  <div className="text-sm whitespace-pre-wrap break-words">
+                    {message.content ||
+                      (loading && index === messages.length - 1 ? (
+                        <div className="flex items-center gap-2">
+                          <Loader className="w-4 h-4 animate-spin" />
+                          <span>Analyzing...</span>
+                        </div>
+                      ) : (
+                        ""
+                      ))}
+                  </div>
                 </div>
-              </div>
-              {message.role === "user" && (
-                <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
-                  <User className="w-4 h-4 text-blue-500" />
-                </div>
-              )}
-            </motion.div>
+                {message.role === "user" && (
+                  <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center flex-shrink-0">
+                    <User className="w-4 h-4 text-blue-500" />
+                  </div>
+                )}
+              </motion.div>
+            </div>
           ))}
         </AnimatePresence>
         <div ref={messagesEndRef} />
@@ -311,6 +494,7 @@ function TradingChat({ accessToken }) {
             ⚠️ Authentication required to use trading features
           </p>
         )}
+      </div>
       </div>
     </div>
   );

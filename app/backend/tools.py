@@ -3,9 +3,29 @@ Tool definitions for Ollama/LLM function calling with DhanHQ APIs
 
 This module defines the tools/functions that can be called by Ollama or other LLMs
 to interact with DhanHQ trading APIs. Follows OpenAI function calling format.
+
+DEPRECATED: This module now uses the new agent.tool_registry system.
+The DHANHQ_TOOLS list is generated from the tool registry.
 """
 
-DHANHQ_TOOLS = [
+# Import the new tool registry system
+_HAS_NEW_REGISTRY = False
+get_tool_specs = None
+
+try:
+    from agent.tool_registry import get_tool_specs
+    _HAS_NEW_REGISTRY = True
+except ImportError:
+    # Fallback: try with app prefix (for different path setups)
+    try:
+        from app.agent.tool_registry import get_tool_specs
+        _HAS_NEW_REGISTRY = True
+    except ImportError:
+        # If both fail, use legacy tools
+        pass
+
+# Legacy tool definitions (kept for reference and fallback)
+_LEGACY_DHANHQ_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -41,13 +61,13 @@ DHANHQ_TOOLS = [
                     },
                     "exchange_segment": {
                         "type": "string",
-                        "description": "Exchange segment where the security is traded",
-                        "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_COM", "NCDEX_COM"]
+                        "description": "Exchange segment where the security is traded (use IDX_I for indices like NIFTY, SENSEX)",
+                        "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_COM", "NCDEX_COM", "IDX_I"]
                     },
                     "instrument_type": {
                         "type": "string",
-                        "description": "Type of instrument",
-                        "enum": ["EQUITY", "FUTURES", "OPTIONS"]
+                        "description": "Type of instrument (use INDEX for indices like NIFTY, SENSEX)",
+                        "enum": ["EQUITY", "FUTURES", "OPTIONS", "INDEX"]
                     },
                     "from_date": {
                         "type": "string",
@@ -200,7 +220,7 @@ DHANHQ_TOOLS = [
         "type": "function",
         "function": {
             "name": "analyze_market",
-            "description": "Comprehensive market analysis combining current quotes and historical data. Fetches current price, recent trend, and provides analysis summary. Use for quick market overview and trend analysis.",
+            "description": "Comprehensive market analysis combining current quotes and historical data. Fetches current price, recent trend, and provides analysis summary. USE THIS TOOL when users ask about 'trend', 'analysis', 'performance', 'movement', 'direction', or 'how is X doing'. This tool automatically combines current price with historical data to calculate trend direction (up/down/neutral) and percentage change.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -210,8 +230,8 @@ DHANHQ_TOOLS = [
                     },
                     "exchange_segment": {
                         "type": "string",
-                        "description": "Exchange segment",
-                        "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"]
+                        "description": "Exchange segment (use IDX_I for indices like NIFTY, SENSEX)",
+                        "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "IDX_I"]
                     },
                     "days": {
                         "type": "integer",
@@ -238,4 +258,17 @@ TOOL_EXECUTORS = {
     "get_trades": "get_trades",
     "analyze_market": "analyze_market"  # Composite function
 }
+
+# Generate tools from registry (backward compatibility)
+# This runs after _LEGACY_DHANHQ_TOOLS is defined
+if _HAS_NEW_REGISTRY and get_tool_specs:
+    try:
+        DHANHQ_TOOLS = get_tool_specs()
+    except Exception as e:
+        print(f"[tools.py] Warning: Failed to load tools from registry: {e}")
+        # Fall back to legacy tools
+        DHANHQ_TOOLS = _LEGACY_DHANHQ_TOOLS
+else:
+    # Use legacy tools if registry not available
+    DHANHQ_TOOLS = _LEGACY_DHANHQ_TOOLS
 

@@ -22,6 +22,7 @@ function InstrumentSearch({
   const searchRef = useRef(null);
   const suggestionsRef = useRef(null);
   const instrumentsCacheRef = useRef(null); // Cache instruments to avoid reloading
+  const justSelectedRef = useRef(false); // Track if we just selected an instrument
 
   // Load instruments on mount - with caching
   useEffect(() => {
@@ -78,6 +79,12 @@ function InstrumentSearch({
 
   // Filter instruments based on search query - optimized with debouncing
   useEffect(() => {
+    // Don't show suggestions if we just selected an instrument
+    if (justSelectedRef.current) {
+      justSelectedRef.current = false;
+      return;
+    }
+
     if (searchQuery.trim().length < 2) {
       setFilteredInstruments({
         indices: [],
@@ -124,6 +131,11 @@ function InstrumentSearch({
           inst.SEM_CUSTOM_SYMBOL ||
           ""
         ).toLowerCase();
+        const underlyingSymbol = (
+          inst.UNDERLYING_SYMBOL ||
+          inst.underlying_symbol ||
+          ""
+        ).toLowerCase();
         const securityId = (
           inst.SEM_SECURITY_ID ||
           inst.SECURITY_ID ||
@@ -136,6 +148,7 @@ function InstrumentSearch({
           symbolName.includes(query) ||
           tradingSymbol.includes(query) ||
           displayName.includes(query) ||
+          underlyingSymbol.includes(query) ||
           securityId.includes(query) ||
           isin.includes(query)
         );
@@ -422,10 +435,15 @@ function InstrumentSearch({
         instrument.SEM_TRADING_SYMBOL || instrument.TRADING_SYMBOL || "",
       displayName:
         instrument.DISPLAY_NAME || instrument.SEM_CUSTOM_SYMBOL || "",
+      underlyingSymbol:
+        instrument.UNDERLYING_SYMBOL || instrument.underlying_symbol || "",
       lotSize: instrument.LOT_SIZE || instrument.SEM_LOT_UNITS || 1,
       tickSize: instrument.TICK_SIZE || instrument.SEM_TICK_SIZE || 0.01,
       instrument: instrument,
     };
+
+    // Mark that we just selected an instrument to prevent suggestions from showing
+    justSelectedRef.current = true;
 
     setSearchQuery(
       instrumentData.displayName ||
@@ -539,8 +557,14 @@ function InstrumentSearch({
         <input
           type="text"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => {
+            // Reset the selection flag when user types
+            justSelectedRef.current = false;
+            setSearchQuery(e.target.value);
+          }}
           onFocus={() => {
+            // Reset the selection flag when user focuses
+            justSelectedRef.current = false;
             if (
               (filteredInstruments.indices &&
                 filteredInstruments.indices.length > 0) ||
