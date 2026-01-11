@@ -154,19 +154,75 @@ async def search_instruments(
     """
     try:
         db = Database()
+        query_upper = query.upper().strip()
+
+        # Normalize common index queries and detect if it's an index query
+        is_index_query = False
+        if query_upper in ["NIFTY", "NIFTY 50", "NIFTY50"]:
+            query_upper = "NIFTY 50"
+            is_index_query = True
+        elif query_upper in ["BANK NIFTY", "NIFTY BANK", "BANKNIFTY"]:
+            query_upper = "BANK NIFTY"
+            is_index_query = True
+        elif query_upper in ["SENSEX", "BSE SENSEX"]:
+            is_index_query = True
+
+        # Check if this looks like an index query (NIFTY, SENSEX, etc.)
+        # Auto-detect common indices even if instrument_type is not specified
+        is_index_query = (
+            is_index_query or
+            (instrument_type and instrument_type.upper() == "INDEX") or
+            "NIFTY" in query_upper or
+            "SENSEX" in query_upper
+        ) or "NIFTY" in query_upper
 
         # For indices like NIFTY, SENSEX, try to get from IDX_I segment directly first
-        query_upper = query.upper().strip()
-        if instrument_type and instrument_type.upper() == "INDEX":
+        if is_index_query:
             try:
                 # Try to get instruments from IDX_I segment using API
                 segment_result = await trading_service.get_instrument_list_segmentwise("IDX_I")
                 if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
                     idx_instruments = segment_result["data"]["instruments"]
-                    # Search in IDX_I instruments
+                    # Search in IDX_I instruments - filter by underlying_symbol in CAPS
                     for inst in idx_instruments:
-                        symbol_name = (inst.get("SYMBOL_NAME") or "").upper()
-                        if query_upper in symbol_name or symbol_name == query_upper:
+                        # Get underlying_symbol in uppercase - this is the key identifier
+                        underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("UNDERLYING") or "").upper().strip()
+
+                        # Also get other fields for fallback
+                        symbol_name = (inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME") or "").upper()
+                        trading_symbol = (inst.get("TRADING_SYMBOL") or "").upper()
+                        display_name = (inst.get("DISPLAY_NAME") or "").upper()
+
+                        # PRIMARY MATCH: Use underlying_symbol in CAPS to identify the instrument
+                        # This is the correct way to identify instruments from the exchange_segment list
+                        matches = False
+                        if underlying_symbol:
+                            # For NIFTY queries, check if underlying_symbol (in CAPS) matches
+                            if query_upper == "NIFTY 50" or query_upper == "NIFTY":
+                                # Match if underlying_symbol contains "NIFTY" (e.g., "NIFTY", "NIFTY 50")
+                                matches = underlying_symbol == "NIFTY" or "NIFTY" in underlying_symbol
+                            elif query_upper == "BANK NIFTY":
+                                # Match if underlying_symbol contains both "BANK" and "NIFTY"
+                                matches = "BANK" in underlying_symbol and "NIFTY" in underlying_symbol
+                            else:
+                                # Exact match or contains match on underlying_symbol
+                                matches = underlying_symbol == query_upper or query_upper in underlying_symbol
+
+                        # FALLBACK: If underlying_symbol doesn't match, check other fields
+                        if not matches:
+                            if query_upper == "NIFTY 50" or query_upper == "NIFTY":
+                                # For NIFTY, match if it contains "NIFTY" and "50" or just "NIFTY 50"
+                                matches = ("NIFTY" in symbol_name and "50" in symbol_name) or "NIFTY 50" in symbol_name or "NIFTY 50" in display_name
+                            elif query_upper == "BANK NIFTY":
+                                matches = "BANK" in symbol_name and "NIFTY" in symbol_name
+                            else:
+                                matches = (
+                                    query_upper in symbol_name or symbol_name == query_upper or
+                                    query_upper in trading_symbol or trading_symbol == query_upper or
+                                    query_upper in display_name or display_name == query_upper
+                                )
+
+                        if matches:
                             security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
                             exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
                             if security_id:
@@ -176,9 +232,9 @@ async def search_instruments(
                                         "instruments": [{
                                             "security_id": int(security_id),
                                             "exchange_segment": "IDX_I",
-                                            "symbol_name": inst.get("SYMBOL_NAME", ""),
+                                            "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
                                             "trading_symbol": inst.get("TRADING_SYMBOL", ""),
-                                            "display_name": inst.get("DISPLAY_NAME", ""),
+                                            "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
                                             "instrument_type": "INDEX",
                                             "exchange": exchange,
                                             "segment": "I"
@@ -187,11 +243,44 @@ async def search_instruments(
                                         "query": query
                                     }
                                 }
+                elif not segment_result.get("success"):
+                    # Log the error but continue to database search
+                    error_msg = segment_result.get("error", "Unknown error")
+                    print(f"Warning: Failed to fetch IDX_I instruments from API: {error_msg}")
             except Exception as e:
-                pass
+                # Log the error but continue to database search
+                print(f"Warning: Exception while fetching IDX_I instruments: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
 
         # Get all instruments from database
-        instruments = await db.get_instruments("detailed", limit=50000)
+        try:
+            instruments = await db.get_instruments("detailed", limit=50000)
+            if not instruments:
+                # If database is empty, try to fetch from CSV as fallback
+                print("Database is empty, trying to fetch from CSV...")
+                csv_result = trading_service.get_instrument_list_csv("detailed")
+                if csv_result.get("success") and csv_result.get("data", {}).get("instruments"):
+                    instruments = csv_result["data"]["instruments"]
+                    # Optionally save to DB for future use
+                    try:
+                        await db.save_instruments(instruments, "detailed")
+                    except Exception as e:
+                        print(f"Warning: Could not save instruments to database: {e}")
+                else:
+                    instruments = []
+        except Exception as e:
+            print(f"Error fetching instruments from database: {str(e)}")
+            # Try CSV as fallback
+            try:
+                csv_result = trading_service.get_instrument_list_csv("detailed")
+                if csv_result.get("success") and csv_result.get("data", {}).get("instruments"):
+                    instruments = csv_result["data"]["instruments"]
+                else:
+                    instruments = []
+            except Exception as csv_error:
+                print(f"Error fetching instruments from CSV: {str(csv_error)}")
+                instruments = []
 
         # Filter instruments
         results = []
@@ -203,36 +292,65 @@ async def search_instruments(
             underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("SEM_UNDERLYING_SYMBOL") or "").upper()
             security_id = str(inst.get("SEM_SECURITY_ID") or inst.get("SECURITY_ID") or inst.get("SM_SECURITY_ID") or "")
 
-            # Check if query matches
-            matches = (
-                query_upper in symbol_name or
-                query_upper in trading_symbol or
-                query_upper in display_name or
-                query_upper in underlying_symbol or
-                query_upper == security_id
-            )
+            # Get segment and exchange for filtering
+            segment = (inst.get("SEM_SEGMENT") or inst.get("SEGMENT") or "").upper()
+            exchange = (inst.get("SEM_EXM_EXCH_ID") or inst.get("EXCH_ID") or inst.get("EXCHANGE_ID") or "").upper()
 
-            if not matches:
-                continue
+            # For index queries, prioritize matching on underlying_symbol (in CAPS) and segment
+            if is_index_query:
+                # For indices, must have segment "I" and underlying_symbol (in CAPS) should match
+                if segment != "I":
+                    # Not an index segment, skip for index queries
+                    continue
+
+                # PRIMARY MATCH: Check if underlying_symbol (in CAPS) matches
+                # This is the key identifier for instruments from exchange_segment list
+                matches = False
+                if underlying_symbol:
+                    # For NIFTY queries, check if underlying_symbol (in CAPS) contains "NIFTY"
+                    if query_upper == "NIFTY 50" or query_upper == "NIFTY":
+                        # Match if underlying_symbol (in CAPS) equals "NIFTY" or contains "NIFTY"
+                        matches = underlying_symbol == "NIFTY" or "NIFTY" in underlying_symbol
+                    elif query_upper == "BANK NIFTY":
+                        matches = "BANK" in underlying_symbol and "NIFTY" in underlying_symbol
+                    else:
+                        # Exact match or contains match on underlying_symbol (in CAPS)
+                        matches = underlying_symbol == query_upper or query_upper in underlying_symbol
+
+                # FALLBACK: Also check other fields if underlying_symbol doesn't match
+                if not matches:
+                    matches = (
+                        query_upper in symbol_name or
+                        query_upper in trading_symbol or
+                        query_upper in display_name
+                    )
+
+                if not matches:
+                    continue
+            else:
+                # For non-index queries, check all fields
+                matches = (
+                    query_upper in symbol_name or
+                    query_upper in trading_symbol or
+                    query_upper in display_name or
+                    query_upper in underlying_symbol or
+                    query_upper == security_id
+                )
+                if not matches:
+                    continue
 
             # Apply filters if provided
             if exchange_segment:
-                exchange = inst.get("SEM_EXM_EXCH_ID") or inst.get("EXCH_ID") or inst.get("EXCHANGE_ID") or ""
-                segment = inst.get("SEM_SEGMENT") or inst.get("SEGMENT") or ""
-
-                exchange_upper = exchange.upper()
-                segment_upper = segment.upper()
-
                 # Handle IDX_I specially
                 if exchange_segment == "IDX_I":
-                    if segment_upper != "I":
+                    if segment != "I":
                         continue
                 else:
                     expected_exchange = exchange_segment.split("_")[0]
                     expected_segment = exchange_segment.split("_")[1] if "_" in exchange_segment else ""
                     segment_map = {"EQ": "E", "FNO": "D", "FO": "D", "IDX": "I", "COM": "M"}
                     expected_segment_code = segment_map.get(expected_segment, expected_segment)
-                    if exchange_upper != expected_exchange or (expected_segment_code and segment_upper != expected_segment_code):
+                    if exchange.upper() != expected_exchange.upper() or (expected_segment_code and segment != expected_segment_code):
                         continue
 
             if instrument_type:
@@ -280,6 +398,13 @@ async def search_instruments(
             if len(results) >= limit:
                 break
 
+        if not results:
+            # If no results found, provide helpful error message
+            return {
+                "success": False,
+                "error": f"No instruments found matching '{query}'. Please check the spelling or try a different search term. For indices like NIFTY, ensure you're searching with the correct name."
+            }
+
         return {
             "success": True,
             "data": {
@@ -290,9 +415,13 @@ async def search_instruments(
         }
 
     except Exception as e:
+        error_detail = str(e) if str(e) else repr(e)
+        import traceback
+        print(f"Error in search_instruments: {error_detail}")
+        print(traceback.format_exc())
         return {
             "success": False,
-            "error": f"Error searching instruments: {str(e)}"
+            "error": f"Error searching instruments: {error_detail}"
         }
 
 
