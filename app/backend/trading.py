@@ -248,7 +248,9 @@ class TradingService:
                 dhan = self.get_dhan_instance(access_token)
 
             # Convert security_id to string (per official example: "1333" not 1333)
-            security_id_str = str(security_id)
+            # Also ensure we have the numeric value for comparisons
+            security_id_int = int(security_id) if isinstance(security_id, str) else security_id
+            security_id_str = str(security_id_int)
 
             # For historical data API, exchange_segment should be just the exchange name (NSE, BSE, MCX, NCDEX)
             # Not the full segment like "NSE_EQ" or "IDX_I"
@@ -263,13 +265,16 @@ class TradingService:
                 # BSE indices typically have higher IDs (e.g., 51 for SENSEX)
                 # Common NSE indices: 13 (NIFTY 50), 14 (NIFTY Bank), etc.
                 # Common BSE indices: 51 (SENSEX), etc.
-                if security_id in [13, 14, 15, 16, 17, 18, 19, 20]:  # Common NSE indices
+                print(f"[get_historical_data] Processing IDX_I index with security_id={security_id_int}")
+                if security_id_int in [13, 14, 15, 16, 17, 18, 19, 20]:  # Common NSE indices
                     exchange_seg_str = "NSE"
-                elif security_id in [51, 52, 53, 54, 55]:  # Common BSE indices
+                    print(f"[get_historical_data] Mapped security_id {security_id_int} to NSE")
+                elif security_id_int in [51, 52, 53, 54, 55]:  # Common BSE indices
                     exchange_seg_str = "BSE"
+                    print(f"[get_historical_data] Mapped security_id {security_id_int} to BSE")
                 else:
                     # Default to NSE for unknown indices, but log a warning
-                    print(f"[get_historical_data] Unknown index security_id {security_id}, defaulting to NSE")
+                    print(f"[get_historical_data] Unknown index security_id {security_id_int}, defaulting to NSE")
                     exchange_seg_str = "NSE"
             elif exchange_seg_str.startswith('NSE'):
                 # Extract "NSE" from "NSE_EQ", "NSE_FO", etc.
@@ -303,7 +308,11 @@ class TradingService:
 
             # Fetch data based on interval type
             try:
-                if interval.lower() in ["daily", "day"]:
+                # Check if interval is numeric (1, 5, 10, 15, 60) or daily
+                interval_str = str(interval).strip()
+                is_daily = interval_str.lower() in ["daily", "day"]
+
+                if is_daily:
                     # Daily historical data (per official example)
                     print(f"[get_historical_data] Calling historical_daily_data with security_id={security_id_str}, exchange_seg={exchange_seg}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
                     data = dhan.historical_daily_data(
@@ -314,22 +323,139 @@ class TradingService:
                         to_date=to_date
                     )
                 else:
-                    # Intraday minute data (per official example)
-                    # Supports: "intraday", "minute", "intraday_minute"
-                    print(f"[get_historical_data] Calling intraday_minute_data with security_id={security_id_str}, exchange_seg={exchange_seg}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
-                    data = dhan.intraday_minute_data(
-                        security_id=security_id_str,
-                        exchange_segment=exchange_seg,
-                        instrument_type=instrument_type,
-                        from_date=from_date,
-                        to_date=to_date
-                    )
+                    # Intraday minute data using REST API /v2/charts/intraday
+                    # This endpoint supports intervals: 1, 5, 15, 25, 60
+                    # Requires exchangeSegment (e.g., "NSE_EQ") not just "NSE"
+                    # Requires instrument (e.g., "EQUITY") not instrument_type
+                    # Date format: "YYYY-MM-DD HH:MM:SS"
+
+                    interval_value = "1"  # Default to 1 minute
+                    if interval_str.isdigit():
+                        interval_int = int(interval_str)
+                        # Validate interval is one of the supported values
+                        if interval_int in [1, 5, 15, 25, 60]:
+                            interval_value = str(interval_int)
+                        else:
+                            print(f"[get_historical_data] Invalid interval {interval_int}, defaulting to 1 minute")
+                            interval_value = "1"
+                    else:
+                        print(f"[get_historical_data] Non-numeric interval '{interval_str}', defaulting to 1 minute")
+
+                    # Use original exchange_segment (e.g., "NSE_EQ", "IDX_I") for REST API
+                    # Convert instrument_type to instrument
+                    instrument = instrument_type.upper()
+
+                    # Format dates with time: "YYYY-MM-DD HH:MM:SS"
+                    # Market hours: 9:15 AM to 3:30 PM IST
+                    from_datetime = f"{from_date} 09:15:00"
+                    to_datetime = f"{to_date} 15:30:00"
+
+                    print(f"[get_historical_data] Calling REST API /v2/charts/intraday with:")
+                    print(f"  securityId={security_id_str}")
+                    print(f"  exchangeSegment={exchange_segment}")
+                    print(f"  instrument={instrument}")
+                    print(f"  interval={interval_value}")
+                    print(f"  fromDate={from_datetime}")
+                    print(f"  toDate={to_datetime}")
+
+                    # Call REST API endpoint
+                    api_url = "https://api.dhan.co/v2/charts/intraday"
+                    headers = {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                        "access-token": access_token
+                    }
+                    payload = {
+                        "securityId": security_id_str,
+                        "exchangeSegment": exchange_segment,  # Use original format like "NSE_EQ", "IDX_I"
+                        "instrument": instrument,
+                        "interval": interval_value,
+                        "oi": False,  # Open Interest (for F&O)
+                        "fromDate": from_datetime,
+                        "toDate": to_datetime
+                    }
+
+                    try:
+                        response = httpx.post(api_url, headers=headers, json=payload, timeout=30.0)
+                        response.raise_for_status()
+                        data = response.json()
+
+                        # Transform response from arrays to list of objects for easier processing
+                        if isinstance(data, dict) and "open" in data and "close" in data:
+                            # Convert array format to list of candle objects
+                            opens = data.get("open", [])
+                            highs = data.get("high", [])
+                            lows = data.get("low", [])
+                            closes = data.get("close", [])
+                            volumes = data.get("volume", [])
+                            timestamps = data.get("timestamp", [])
+                            oi = data.get("open_interest", [])
+
+                            candles = []
+                            for i in range(len(opens)):
+                                candle = {
+                                    "timestamp": timestamps[i] if i < len(timestamps) else None,
+                                    "time": datetime.fromtimestamp(timestamps[i]).isoformat() if i < len(timestamps) and timestamps[i] else None,
+                                    "date": datetime.fromtimestamp(timestamps[i]).isoformat() if i < len(timestamps) and timestamps[i] else None,
+                                    "open": opens[i] if i < len(opens) else None,
+                                    "high": highs[i] if i < len(highs) else None,
+                                    "low": lows[i] if i < len(lows) else None,
+                                    "close": closes[i] if i < len(closes) else None,
+                                    "volume": volumes[i] if i < len(volumes) else 0,
+                                    "open_interest": oi[i] if i < len(oi) else 0
+                                }
+                                candles.append(candle)
+
+                            data = candles
+                            print(f"[get_historical_data] Transformed {len(candles)} candles from REST API response")
+                        else:
+                            print(f"[get_historical_data] Unexpected REST API response format")
+
+                    except httpx.HTTPStatusError as e:
+                        error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
+                        print(f"[get_historical_data] REST API HTTP error: {error_msg}")
+                        # Try to parse error response
+                        try:
+                            error_data = e.response.json()
+                            if isinstance(error_data, dict) and ("status" in error_data or "error" in error_data):
+                                raise Exception(error_msg)
+                        except:
+                            pass
+                        raise Exception(error_msg)
+                    except Exception as e:
+                        error_msg = str(e)
+                        print(f"[get_historical_data] REST API call failed: {error_msg}")
+                        raise
 
                 print(f"[get_historical_data] Success - data type: {type(data)}, length: {len(data) if isinstance(data, (list, dict)) else 'N/A'}")
+
+                # Check if the response is an error response from DhanHQ
+                if isinstance(data, dict):
+                    # Check for DhanHQ error structure
+                    if data.get("status") == "failure" or "error" in data or "errorCode" in data:
+                        error_info = data.get("remarks") or data.get("data") or data
+                        error_code = error_info.get("error_code") or error_info.get("errorCode") or ""
+                        error_message = error_info.get("error_message") or error_info.get("errorMessage") or str(error_info)
+                        error_msg = f"DhanHQ Error {error_code}: {error_message}" if error_code else error_message
+                        print(f"[get_historical_data] DhanHQ API returned error: {error_msg}")
+                        return {"success": False, "error": error_msg, "error_code": error_code, "raw_response": data}
+
                 return {"success": True, "data": data}
             except Exception as api_error:
                 error_msg = str(api_error)
                 print(f"[get_historical_data] API call failed: {error_msg}")
+
+                # Try to extract error details from exception
+                if hasattr(api_error, 'response') or hasattr(api_error, 'args'):
+                    error_details = getattr(api_error, 'args', [])
+                    if error_details and isinstance(error_details[0], dict):
+                        error_data = error_details[0]
+                        if error_data.get("status") == "failure":
+                            error_info = error_data.get("remarks") or error_data.get("data") or {}
+                            error_code = error_info.get("error_code") or error_info.get("errorCode") or ""
+                            error_message = error_info.get("error_message") or error_info.get("errorMessage") or str(error_info)
+                            error_msg = f"DhanHQ Error {error_code}: {error_message}" if error_code else error_message
+                            return {"success": False, "error": error_msg, "error_code": error_code, "raw_response": error_data}
 
                 # For indices (when original exchange_segment was IDX_I), try fallback to other exchange if first attempt failed
                 if exchange_segment.upper() == "IDX_I" and hasattr(dhan, 'NSE') and hasattr(dhan, 'BSE'):
@@ -347,7 +473,10 @@ class TradingService:
                     if fallback_exchange:
                         print(f"[get_historical_data] Trying fallback exchange: {fallback_name}")
                         try:
-                            if interval.lower() in ["daily", "day"]:
+                            interval_str = str(interval).strip()
+                            is_daily = interval_str.lower() in ["daily", "day"]
+
+                            if is_daily:
                                 data = dhan.historical_daily_data(
                                     security_id=security_id_str,
                                     exchange_segment=fallback_exchange,
@@ -356,12 +485,20 @@ class TradingService:
                                     to_date=to_date
                                 )
                             else:
+                                # Handle interval for fallback call - use numeric interval
+                                fallback_interval = 1  # Default to 1 minute
+                                if interval_str.isdigit():
+                                    fallback_interval = int(interval_str)
+                                    if fallback_interval not in [1, 5, 10, 15, 60]:
+                                        fallback_interval = 1
+
                                 data = dhan.intraday_minute_data(
                                     security_id=security_id_str,
                                     exchange_segment=fallback_exchange,
                                     instrument_type=instrument_type,
                                     from_date=from_date,
-                                    to_date=to_date
+                                    to_date=to_date,
+                                    interval=fallback_interval
                                 )
                             print(f"[get_historical_data] Fallback succeeded with {fallback_name}")
                             return {"success": True, "data": data}

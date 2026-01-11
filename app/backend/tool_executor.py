@@ -128,15 +128,37 @@ async def execute_tool(
             return result
 
         elif function_name == "get_historical_data":
+            security_id = function_args["security_id"]
+            exchange_segment = function_args["exchange_segment"]
+            instrument_type = function_args["instrument_type"]
+            from_date = function_args["from_date"]
+            to_date = function_args["to_date"]
+            interval = function_args.get("interval", "daily")
+
+            print(f"[get_historical_data] Calling with:")
+            print(f"  security_id: {security_id}")
+            print(f"  exchange_segment: {exchange_segment}")
+            print(f"  instrument_type: {instrument_type}")
+            print(f"  from_date: {from_date}")
+            print(f"  to_date: {to_date}")
+            print(f"  interval: {interval}")
+
             result = trading_service.get_historical_data(
                 access_token,
-                function_args["security_id"],
-                function_args["exchange_segment"],
-                function_args["instrument_type"],
-                function_args["from_date"],
-                function_args["to_date"],
-                function_args.get("interval", "daily")
+                security_id,
+                exchange_segment,
+                instrument_type,
+                from_date,
+                to_date,
+                interval
             )
+
+            if result.get("success"):
+                data_count = len(result.get("data", [])) if isinstance(result.get("data"), list) else "N/A"
+                print(f"[get_historical_data] Success - returned {data_count} data points")
+            else:
+                print(f"[get_historical_data] Failed - error: {result.get('error')}")
+
             return result
 
         elif function_name == "get_positions":
@@ -823,7 +845,11 @@ async def analyze_market_composite(
         instrument_type = "INDEX" if exchange_segment == "IDX_I" else "EQUITY"
 
         # Get historical data
-        print(f"[analyze_market] Fetching historical data for security_id={security_id}, exchange_segment={exchange_segment}, instrument_type={instrument_type}, from_date={from_date}, to_date={to_date}")
+        print(f"[analyze_market] Using instrument:")
+        print(f"  security_id: {security_id}")
+        print(f"  exchange_segment: {exchange_segment}")
+        print(f"  instrument_type: {instrument_type}")
+        print(f"[analyze_market] Fetching historical data for date range: {from_date} to {to_date} (interval: daily)")
         historical_result = trading_service.get_historical_data(
             access_token,
             security_id,

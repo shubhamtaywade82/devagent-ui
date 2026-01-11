@@ -17,6 +17,12 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
   const [feedError, setFeedError] = useState("");
   const wsRef = useRef(null);
 
+  // Intraday historical data state
+  const [intradayData, setIntradayData] = useState(null);
+  const [loadingIntraday, setLoadingIntraday] = useState(false);
+  const [intradayError, setIntradayError] = useState("");
+  const [intradayDate, setIntradayDate] = useState(null);
+
   // Real-time feed WebSocket connection
   useEffect(() => {
     if (!accessToken || !selectedInstrument?.securityId || !selectedInstrument?.exchangeSegment) {
@@ -142,6 +148,21 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialInstrument]);
+
+  // Helper function to get instrument type from exchange segment
+  const getInstrumentType = (exchangeSegment, instrument = null) => {
+    if (exchangeSegment === "IDX_I") {
+      return "INDEX";
+    }
+    if (exchangeSegment?.includes("FNO") || exchangeSegment?.includes("F_O")) {
+      return "FUTURES";
+    }
+    if (instrument?.instrumentType) {
+      return instrument.instrumentType;
+    }
+    // Default to EQUITY for most cases
+    return "EQUITY";
+  };
 
   // Helper function to get exchange name from exchange segment or instrument data
   const getExchangeName = (exchangeSegment, instrument = null) => {
@@ -341,6 +362,8 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
 
         if (quoteInfo) {
           setQuoteData(quoteInfo);
+          // Fetch intraday data after quote data is loaded
+          fetchIntradayData(instrument);
         } else {
           console.error("Could not parse quote data. Response structure:", responseData);
           setError("Could not parse quote data from response");
@@ -352,6 +375,245 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
       setError(err.message || "Failed to get market quote");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fetch intraday historical data - tries today first, then goes back to find last trading day
+  const fetchIntradayData = async (instrument) => {
+    if (!accessToken || !instrument || !instrument.securityId) {
+      return;
+    }
+
+    setLoadingIntraday(true);
+    setIntradayError("");
+
+    try {
+      // Convert securityId to string as required by DhanHQ API
+      const securityId = String(instrument.securityId || "");
+      if (!securityId || securityId === "NaN") {
+        setIntradayError("Invalid security ID");
+        setLoadingIntraday(false);
+        return;
+      }
+
+      const exchangeSegment = instrument.exchangeSegment || "NSE_EQ";
+      const instrumentType = getInstrumentType(exchangeSegment, instrument);
+
+      // Helper function to get date string N days ago
+      const getDateString = (daysAgo = 0) => {
+        const date = new Date();
+        date.setDate(date.getDate() - daysAgo);
+        return date.toISOString().split('T')[0];
+      };
+
+      // DhanHQ intraday_minute_data returns data for last 5 trading days
+      // We need to provide valid dates - use a range that ensures we get data
+      // The API automatically returns the last 5 trading days, so we just need valid dates
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Find the most recent weekday (skip weekends)
+      let toDate = new Date(today);
+      while (toDate.getDay() === 0 || toDate.getDay() === 6) {
+        toDate.setDate(toDate.getDate() - 1);
+      }
+
+      // If it's still today and market might not have data yet, go back one more day
+      // This ensures we request a date that definitely has historical data
+      if (toDate.getTime() === today.getTime()) {
+        toDate.setDate(toDate.getDate() - 1);
+        // Skip weekends
+        while (toDate.getDay() === 0 || toDate.getDay() === 6) {
+          toDate.setDate(toDate.getDate() - 1);
+        }
+      }
+
+      // Format dates as "YYYY-MM-DD HH:MM:SS" for REST API
+      const toDateStr = toDate.toISOString().split('T')[0] + " 15:30:00"; // Market close time
+      const fromDate = new Date(toDate);
+      fromDate.setDate(fromDate.getDate() - 1); // Previous day (ensures from_date != to_date)
+      // Skip weekends for from_date too
+      while (fromDate.getDay() === 0 || fromDate.getDay() === 6) {
+        fromDate.setDate(fromDate.getDate() - 1);
+      }
+      const fromDateStr = fromDate.toISOString().split('T')[0] + " 09:15:00"; // Market open time
+
+      console.log(`[Intraday] Date range: from=${fromDateStr}, to=${toDateStr}`);
+
+      try {
+        console.log(`[Intraday] Fetching data:`, {
+          security_id: securityId,
+          exchange_segment: exchangeSegment,
+          instrument_type: instrumentType,
+          from_date: fromDateStr,
+          to_date: toDateStr,
+          interval: "5"
+        });
+
+        // Use numeric interval (5 minutes) - DhanHQ API expects numeric values: 1, 5, 10, 15, 60
+        const response = await api.getHistoricalData({
+          access_token: accessToken,
+          security_id: securityId,
+          exchange_segment: exchangeSegment,
+          instrument_type: instrumentType.toUpperCase(), // Ensure uppercase (INDEX, EQUITY, etc.)
+          from_date: fromDateStr,
+          to_date: toDateStr,
+          interval: "5", // Fetch intraday minute data with 5-minute interval (supported: 1, 5, 10, 15, 60)
+        });
+
+        console.log(`[Intraday] API Response:`, {
+          success: response.success,
+          hasData: !!response.data,
+          dataType: typeof response.data,
+          isArray: Array.isArray(response.data),
+          dataKeys: response.data && typeof response.data === 'object' ? Object.keys(response.data) : null,
+          error: response.error
+        });
+
+        if (response.success && response.data) {
+          // Handle different response structures
+          let allData = response.data;
+          if (Array.isArray(allData)) {
+            allData = allData;
+          } else if (allData.data && Array.isArray(allData.data)) {
+            allData = allData.data;
+          } else if (allData.historical && Array.isArray(allData.historical)) {
+            allData = allData.historical;
+          } else if (typeof allData === 'object' && allData !== null) {
+            // Try to find array in object values
+            const values = Object.values(allData);
+            const arrayValue = values.find(v => Array.isArray(v));
+            if (arrayValue) {
+              allData = arrayValue;
+            } else {
+              allData = [];
+            }
+          } else {
+            allData = [];
+          }
+
+          console.log(`[Intraday] Parsed data:`, {
+            length: allData.length,
+            firstItem: allData.length > 0 ? allData[0] : null,
+            sampleKeys: allData.length > 0 ? Object.keys(allData[0]) : null
+          });
+
+          if (allData && allData.length > 0) {
+            // Group data by date to find the most recent trading day with data
+            const dataByDate = {};
+            let itemsWithoutDate = 0;
+
+            allData.forEach((item, index) => {
+              // Try multiple possible date field names (timestamp is most common for OHLC data)
+              const itemDate = item.timestamp || item.TIMESTAMP || item.date || item.DATE ||
+                              item.time || item.TIME || item.datetime || item.DATETIME ||
+                              item.start_time || item.START_TIME || item.startTime || "";
+
+              if (!itemDate) {
+                itemsWithoutDate++;
+                // If no date field, log for debugging
+                console.warn(`[Intraday] Item ${index} has no date field. Available keys:`, Object.keys(item));
+                return;
+              }
+
+              try {
+                // Handle different date formats
+                let itemDateStr;
+                if (typeof itemDate === 'string') {
+                  // Try parsing as ISO string or other formats
+                  const dateObj = new Date(itemDate);
+                  if (!isNaN(dateObj.getTime())) {
+                    itemDateStr = dateObj.toISOString().split('T')[0];
+                  } else {
+                    // Try parsing as YYYY-MM-DD directly
+                    if (/^\d{4}-\d{2}-\d{2}/.test(itemDate)) {
+                      itemDateStr = itemDate.split('T')[0].split(' ')[0];
+                    } else {
+                      console.warn(`[Intraday] Could not parse date: ${itemDate}`);
+                      return;
+                    }
+                  }
+                } else if (itemDate instanceof Date) {
+                  itemDateStr = itemDate.toISOString().split('T')[0];
+                } else if (typeof itemDate === 'number') {
+                  // Handle Unix timestamp (seconds or milliseconds)
+                  const dateObj = new Date(itemDate * (itemDate < 10000000000 ? 1000 : 1));
+                  itemDateStr = dateObj.toISOString().split('T')[0];
+                } else {
+                  console.warn(`[Intraday] Unexpected date type:`, typeof itemDate, itemDate);
+                  return;
+                }
+
+                if (!dataByDate[itemDateStr]) {
+                  dataByDate[itemDateStr] = [];
+                }
+                dataByDate[itemDateStr].push(item);
+              } catch (e) {
+                // Skip items with invalid dates
+                console.warn(`[Intraday] Error parsing date for item ${index}:`, e, itemDate);
+              }
+            });
+
+            console.log(`[Intraday] Grouped by date:`, {
+              dates: Object.keys(dataByDate),
+              counts: Object.keys(dataByDate).map(d => ({ date: d, count: dataByDate[d].length })),
+              itemsWithoutDate
+            });
+
+            // Find the most recent date with data (checking from today backwards)
+            let mostRecentDate = null;
+            for (let daysBack = 0; daysBack <= 7; daysBack++) {
+              const checkDate = getDateString(daysBack);
+              if (dataByDate[checkDate] && dataByDate[checkDate].length > 0) {
+                mostRecentDate = checkDate;
+                break;
+              }
+            }
+
+            // If no date match found but we have data, use the most recent date in the data
+            if (!mostRecentDate && Object.keys(dataByDate).length > 0) {
+              const sortedDates = Object.keys(dataByDate).sort().reverse();
+              mostRecentDate = sortedDates[0];
+              console.log(`[Intraday] Using most recent date from data: ${mostRecentDate}`);
+            }
+
+            if (mostRecentDate) {
+              // Use data from the most recent trading day
+              const dataToUse = dataByDate[mostRecentDate];
+              setIntradayData(dataToUse);
+              setIntradayDate(mostRecentDate);
+              console.log(`[Intraday] Success: Found data for ${mostRecentDate}, ${dataToUse.length} entries`);
+            } else {
+              console.warn(`[Intraday] No matching date found. Available dates:`, Object.keys(dataByDate));
+              setIntradayError("No intraday data available for recent trading days");
+              setIntradayData(null);
+              setIntradayDate(null);
+            }
+          } else {
+            console.warn(`[Intraday] Response successful but no data array found`);
+            setIntradayError("No intraday data available for recent trading days");
+            setIntradayData(null);
+            setIntradayDate(null);
+          }
+        } else {
+          const errorMsg = response.error || "Failed to fetch intraday data";
+          console.error(`[Intraday] API Error:`, errorMsg, response);
+          setIntradayError(errorMsg);
+          setIntradayData(null);
+          setIntradayDate(null);
+        }
+      } catch (err) {
+        console.error("[Intraday] Exception fetching intraday data:", err);
+        setIntradayError(err.message || "Failed to fetch intraday data");
+        setIntradayData(null);
+        setIntradayDate(null);
+      }
+    } catch (err) {
+      console.error("Error fetching intraday data:", err);
+      setIntradayError(err.message || "Failed to fetch intraday data");
+      setIntradayData(null);
+    } finally {
+      setLoadingIntraday(false);
     }
   };
 
@@ -499,6 +761,81 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
                   </div>
                 </div>
               )}
+
+              {/* Intraday Historical Data - Below OHLC */}
+              <div className="mt-2.5 pt-2.5 border-t border-zinc-800">
+                <div className="flex items-center justify-between mb-1.5">
+                  <h4 className="text-xs font-medium text-zinc-400">
+                    Intraday Data
+                  </h4>
+                  {intradayDate && (
+                    <span className="text-[10px] text-zinc-500">
+                      {(() => {
+                        const today = new Date().toISOString().split('T')[0];
+                        const dateObj = new Date(intradayDate);
+                        if (intradayDate === today) {
+                          return "Today";
+                        } else {
+                          return dateObj.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                        }
+                      })()}
+                    </span>
+                  )}
+                </div>
+                {loadingIntraday ? (
+                  <div className="text-xs text-zinc-500 py-2">Loading intraday data...</div>
+                ) : intradayError ? (
+                  <div className="text-xs text-red-400 py-1">{intradayError}</div>
+                ) : intradayData && intradayData.length > 0 ? (
+                  <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                    {(() => {
+                      // Get last 10 items and reverse to show most recent first
+                      const recentData = intradayData.slice(-10).reverse();
+                      return recentData.map((item, index) => {
+                        // Handle different data structures
+                        const time = item.time || item.TIME || item.timestamp || item.date || item.datetime || "";
+                        const price = item.close || item.CLOSE || item.price || item.last_price || item.ltp || 0;
+                        const priceNum = typeof price === 'number' ? price : parseFloat(price || 0);
+
+                        // Calculate change from previous item (next in reversed array)
+                        const prevItem = recentData[index + 1];
+                        const prevPrice = prevItem
+                          ? (prevItem.close || prevItem.CLOSE || prevItem.price || prevItem.last_price || prevItem.ltp || priceNum)
+                          : priceNum;
+                        const prevPriceNum = typeof prevPrice === 'number' ? prevPrice : parseFloat(prevPrice || priceNum);
+                        const change = priceNum - prevPriceNum;
+
+                        // Format time
+                        let timeStr = 'N/A';
+                        if (time) {
+                          try {
+                            const timeDate = new Date(time);
+                            if (!isNaN(timeDate.getTime())) {
+                              timeStr = timeDate.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                            } else if (typeof time === 'string' && time.includes(':')) {
+                              // Handle time string format like "09:30:00"
+                              timeStr = time.substring(0, 5);
+                            }
+                          } catch (e) {
+                            timeStr = String(time).substring(0, 5);
+                          }
+                        }
+
+                        return (
+                          <div key={index} className="flex justify-between items-center text-xs py-0.5">
+                            <span className="text-zinc-500 text-[10px]">{timeStr}</span>
+                            <span className={`font-medium text-xs ${change > 0 ? 'text-green-400' : change < 0 ? 'text-red-400' : 'text-white'}`}>
+                              ₹{priceNum.toFixed(2)}
+                            </span>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                ) : (
+                  <div className="text-xs text-zinc-500 py-2">No intraday data available</div>
+                )}
+              </div>
             </div>
 
             {/* Right Side - Option Chain */}

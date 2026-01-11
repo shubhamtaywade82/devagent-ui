@@ -222,9 +222,19 @@ Volume: {volume}
             # Limit the output size for readability
             if len(raw_json) > 2000:
                 raw_json = raw_json[:2000] + "\n... (truncated)"
-            return f"Market data received but format not recognized. This might indicate:\n1. Market is closed\n2. API response format has changed\n3. Security ID or exchange segment is incorrect\n\nRaw response data (for debugging):\n{raw_json}"
 
-    return "\n".join(formatted) if formatted else "No market data available"
+            # Check if this might be an error response
+            if isinstance(data, dict):
+                if data.get("status") == "failure" or "error" in str(data).lower():
+                    error_info = data.get("remarks") or data.get("data") or data.get("error") or {}
+                    error_code = error_info.get("error_code") if isinstance(error_info, dict) else None
+                    error_message = error_info.get("error_message") if isinstance(error_info, dict) else str(error_info)
+                    if error_code or error_message:
+                        return f"Market data request failed. Error: {error_code or ''} {error_message or ''}\n\nPossible reasons:\n1. Market is closed\n2. Invalid security ID or exchange segment\n3. For indices like NIFTY, ensure you're using security_id=13 and exchange_segment='IDX_I'\n4. Access token may be invalid or expired"
+
+            return f"Market data received but format not recognized. This might indicate:\n1. Market is closed\n2. API response format has changed\n3. Security ID or exchange segment is incorrect\n4. For indices like NIFTY, ensure you're using security_id=13 and exchange_segment='IDX_I'\n\nRaw response data (for debugging):\n{raw_json}"
+
+    return "\n".join(formatted) if formatted else "No market data available. Possible reasons:\n1. Market is closed\n2. Security ID or exchange segment format is incorrect\n3. For indices like NIFTY, ensure you're using the correct security_id from search_instruments and exchange_segment 'IDX_I'\n\nTry searching for the instrument first using search_instruments to get the correct security_id and exchange_segment."
 
 
 def format_positions_result(data):
@@ -1055,11 +1065,23 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                         print(f"[chat] Full instrument data: {inst}")
 
                                     if security_id and exchange_segment:
+                                        # Log which instrument is being used
+                                        instrument_details = {
+                                            "name": inst.get("display_name") or inst.get("symbol_name") or instrument_name,
+                                            "security_id": security_id,
+                                            "exchange_segment": exchange_segment,
+                                            "instrument_type": inst.get("instrument_type", "N/A"),
+                                            "symbol_name": inst.get("symbol_name", "N/A"),
+                                            "underlying_symbol": inst.get("underlying_symbol", "N/A")
+                                        }
+                                        print(f"[chat] Using instrument for analysis: {json.dumps(instrument_details, indent=2)}")
+
                                         # Check if this is a trend/analysis query
                                         is_trend_query = any(keyword in user_message for keyword in ["trend", "analysis", "performance", "movement", "direction", "how is", "how are"])
 
                                         if is_trend_query:
                                             # Use analyze_market for trend analysis
+                                            print(f"[chat] Calling analyze_market with security_id={security_id}, exchange_segment={exchange_segment}")
                                             analysis_result = await execute_tool(
                                                 "analyze_market",
                                                 {"security_id": security_id, "exchange_segment": exchange_segment, "days": 30},
@@ -1069,6 +1091,9 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                             if analysis_result.get("success"):
                                                 instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
                                                 data = analysis_result.get("data", {})
+
+                                                # Add instrument details to response
+                                                instrument_info = f"**Instrument Details:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n"
 
                                                 # Format the analysis result
                                                 if data.get("formatted_analysis"):
@@ -1083,12 +1108,13 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                                 else:
                                                     formatted = json.dumps(data, indent=2)
 
-                                                return {"response": f"Here's the trend analysis for {instrument_name_for_format}:\n\n{formatted}"}
+                                                return {"response": f"{instrument_info}Here's the trend analysis for {instrument_name_for_format}:\n\n{formatted}"}
                                             else:
                                                 error_msg = analysis_result.get("error", "Unknown error")
-                                                return {"response": f"Found {instrument_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to analyze trend: {error_msg}"}
+                                                return {"response": f"**Instrument Found:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n**Error:** Failed to analyze trend: {error_msg}"}
                                         else:
                                             # Regular price query - use get_market_quote
+                                            print(f"[chat] Calling get_market_quote with securities={{'{exchange_segment}': [{security_id}]}}")
                                             quote_result = await execute_tool(
                                                 "get_market_quote",
                                                 {"securities": {exchange_segment: [security_id]}},
@@ -1099,11 +1125,14 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                                 # Pass instrument name to formatting function for better symbol extraction
                                                 instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
                                                 formatted = format_market_quote_result(quote_result.get("data", {}), instrument_name=instrument_name_for_format)
-                                                return {"response": f"Here's the current {instrument_name_for_format} data:\n\n{formatted}"}
+
+                                                # Add instrument details to response
+                                                instrument_info = f"**Instrument Details:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n- Symbol: {instrument_details['symbol_name']}\n\n"
+                                                return {"response": f"{instrument_info}Here's the current {instrument_name_for_format} data:\n\n{formatted}"}
                                             else:
                                                 error_msg = quote_result.get("error", "Unknown error")
                                                 symbol_name = inst.get("display_name") or inst.get("symbol_name") or instrument_name
-                                                return {"response": f"Found {symbol_name} (Security ID: {security_id}, Exchange: {exchange_segment}), but failed to fetch market data: {error_msg}"}
+                                                return {"response": f"**Instrument Found:**\n- Name: {symbol_name}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n**Error:** Failed to fetch market data: {error_msg}"}
                                     else:
                                         return {"response": f"Found {instrument_name} but missing security_id or exchange_segment in search results."}
                                 else:
@@ -1321,8 +1350,11 @@ CRITICAL WORKFLOW:
 3. When users ask about TRENDS, ANALYSIS, or HISTORICAL PERFORMANCE:
    - Call search_instruments first to get security_id and exchange_segment
    - Then call analyze_market OR get_historical_data to get trend information
-   - analyze_market provides comprehensive analysis (current price + historical trend)
+   - analyze_market provides comprehensive analysis (current price + historical trend) using daily data
    - get_historical_data provides raw historical OHLCV data for custom analysis
+   - For daily data: use interval="daily" with dates in YYYY-MM-DD format
+   - For intraday data: use interval="1", "5", "15", "25", or "60" (minutes) with dates in YYYY-MM-DD HH:MM:SS format (market hours: 09:15:00 to 15:30:00)
+   - Intraday data returns candle objects with timestamp, time, date, OHLC, volume, and open_interest (for F&O)
    - For indices (NIFTY, SENSEX), use exchange_segment="IDX_I" and instrument_type="INDEX"
 
 4. When users ask about positions, holdings, or portfolio:
@@ -1332,9 +1364,12 @@ CRITICAL WORKFLOW:
 
 5. Workflow examples:
    User: "What's the price of NIFTY?"
-   Step 1: Call search_instruments(query="NIFTY", instrument_type="INDEX")
-   Step 2: Use the returned security_id and exchange_segment="IDX_I" to call get_market_quote
-   Step 3: Provide the actual price from the response
+   Step 1: Call search_instruments(query="NIFTY", instrument_type="INDEX") or find_instrument(query="NIFTY", instrument_type="INDEX")
+   Step 2: Extract security_id (should be 13 for NIFTY 50) and exchange_segment (should be "IDX_I") from the search results
+   Step 3: Call get_market_quote with securities={"IDX_I": [13]} (using the actual security_id from step 2)
+   Step 4: Format and provide the actual price from the response
+
+   IMPORTANT: Always use the exact security_id and exchange_segment returned from search_instruments/find_instrument. Do not guess or use hardcoded values.
 
    User: "What is the SENSEX trend?"
    Step 1: Call search_instruments(query="SENSEX", instrument_type="INDEX")
@@ -1344,7 +1379,10 @@ CRITICAL WORKFLOW:
 Available tools:
 - search_instruments: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
 - get_market_quote: Get current prices (requires security_id and exchange_segment from search_instruments)
-- get_historical_data: Get price history for trend analysis (requires security_id, exchange_segment, instrument_type, from_date, to_date)
+- get_historical_data: Get price history for trend analysis (requires security_id, exchange_segment, instrument_type, from_date, to_date, interval)
+  * For daily data: interval="daily", dates in YYYY-MM-DD format
+  * For intraday data: interval="1", "5", "15", "25", or "60" (minutes), dates in YYYY-MM-DD HH:MM:SS format (09:15:00 to 15:30:00)
+  * Returns OHLCV data: daily format has date/open/high/low/close/volume, intraday format adds timestamp/time/open_interest
 - analyze_market: Comprehensive market analysis with trend (requires security_id and exchange_segment) - USE THIS FOR TREND QUERIES
 - get_positions: Get user's open positions
 - get_holdings: Get user's holdings
@@ -1723,7 +1761,12 @@ async def get_historical_data(request: HistoricalDataRequest):
         request.interval
     )
     if not result.get("success"):
-        raise HTTPException(status_code=500, detail=result.get("error", "Failed to get historical data"))
+        # Return the error with proper structure, including error code if available
+        error_detail = result.get("error", "Failed to get historical data")
+        error_code = result.get("error_code")
+        if error_code:
+            error_detail = f"[{error_code}] {error_detail}"
+        raise HTTPException(status_code=500, detail=error_detail)
     return result
 
 

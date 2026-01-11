@@ -22,7 +22,7 @@ class GetHistoricalDataTool(Tool):
     """Get historical price data (daily or intraday minute data) for technical analysis"""
 
     name = "get_historical_data"
-    description = "Get historical price data (daily or intraday minute data) for technical analysis, backtesting, or trend analysis. Returns OHLCV data for the specified date range."
+    description = "Get historical price data (daily or intraday minute data) for technical analysis, backtesting, or trend analysis. Returns OHLCV data for the specified date range. For intraday data, supports intervals of 1, 5, 15, 25, or 60 minutes. Intraday data includes timestamps and can be used for detailed minute-by-minute analysis. Daily data provides end-of-day OHLCV values."
 
     input_schema = {
         "type": "object",
@@ -43,16 +43,16 @@ class GetHistoricalDataTool(Tool):
             },
             "from_date": {
                 "type": "string",
-                "description": "Start date in YYYY-MM-DD format (e.g., '2024-01-01')"
+                "description": "Start date in YYYY-MM-DD format (e.g., '2024-01-01') for daily data, or YYYY-MM-DD HH:MM:SS format (e.g., '2024-01-01 09:15:00') for intraday data. For intraday, use market hours (09:15:00 to 15:30:00)."
             },
             "to_date": {
                 "type": "string",
-                "description": "End date in YYYY-MM-DD format (e.g., '2024-01-31')"
+                "description": "End date in YYYY-MM-DD format (e.g., '2024-01-31') for daily data, or YYYY-MM-DD HH:MM:SS format (e.g., '2024-01-31 15:30:00') for intraday data. For intraday, use market hours (09:15:00 to 15:30:00)."
             },
             "interval": {
                 "type": "string",
-                "description": "Data interval - 'daily' for daily candles, 'intraday' or 'minute' for minute-by-minute data",
-                "enum": ["daily", "intraday", "minute"],
+                "description": "Data interval - 'daily' for daily candles, or numeric string ('1', '5', '15', '25', '60') for intraday minute data. For intraday, intervals are in minutes: 1, 5, 15, 25, or 60 minutes.",
+                "enum": ["daily", "1", "5", "15", "25", "60", "intraday", "minute"],
                 "default": "daily"
             }
         },
@@ -64,20 +64,23 @@ class GetHistoricalDataTool(Tool):
         "properties": {
             "data": {
                 "type": "array",
-                "description": "Historical OHLCV data",
+                "description": "Historical OHLCV data. For daily data: array of objects with date, open, high, low, close, volume. For intraday data: array of candle objects with timestamp (Unix epoch), time (ISO format), date (ISO format), open, high, low, close, volume, and open_interest (for F&O).",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "date": {"type": "string"},
-                        "open": {"type": "number"},
-                        "high": {"type": "number"},
-                        "low": {"type": "number"},
-                        "close": {"type": "number"},
-                        "volume": {"type": "number"}
+                        "date": {"type": "string", "description": "Date in ISO format or YYYY-MM-DD format"},
+                        "time": {"type": "string", "description": "Time in ISO format (for intraday data)"},
+                        "timestamp": {"type": "integer", "description": "Unix epoch timestamp (for intraday data)"},
+                        "open": {"type": "number", "description": "Open price"},
+                        "high": {"type": "number", "description": "High price"},
+                        "low": {"type": "number", "description": "Low price"},
+                        "close": {"type": "number", "description": "Close price"},
+                        "volume": {"type": "number", "description": "Volume traded"},
+                        "open_interest": {"type": "number", "description": "Open interest (for Futures & Options, intraday data only)"}
                     }
                 }
             },
-            "count": {"type": "integer"}
+            "count": {"type": "integer", "description": "Number of data points returned"}
         }
     }
 
