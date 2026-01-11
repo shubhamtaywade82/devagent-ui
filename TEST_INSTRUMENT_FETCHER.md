@@ -77,6 +77,8 @@ python3 test_instrument.py --list NSE_EQ --limit 50
 - `--list SEGMENT`: List all instruments from a segment (e.g., IDX_I, NSE_EQ)
 - `--find SEGMENT SYMBOL`: Find a specific instrument by segment and symbol
 - `--search QUERY`: Search for instruments across segments
+- `--quote SYMBOL`: Find instrument and fetch market quote (price, OHLC, volume). Requires `--token` or `DHAN_ACCESS_TOKEN` env var
+- `--token TOKEN`: DhanHQ access token (or set `DHAN_ACCESS_TOKEN` environment variable)
 - `--segment SEGMENT`: Filter by exchange segment (use with --search)
 - `--type TYPE`: Filter by instrument type: EQUITY, INDEX, FUTURES, OPTIONS (use with --search)
 - `--exact`: Use exact match instead of substring match
@@ -104,4 +106,30 @@ python3 test_instrument.py --list IDX_I --limit 100
 ```bash
 python3 test_instrument.py --find IDX_I "NIFTY 50" --exact
 ```
+
+### Fetch Market Quote for NIFTY
+```bash
+# Using command line argument
+python3 test_instrument_fetcher.py --quote NIFTY --token YOUR_ACCESS_TOKEN
+
+# Using environment variable (recommended)
+export DHAN_ACCESS_TOKEN=your_access_token_here
+python3 test_instrument_fetcher.py --quote NIFTY
+
+# Or set it in your shell profile (~/.bashrc, ~/.zshrc, etc.)
+echo 'export DHAN_ACCESS_TOKEN=your_access_token_here' >> ~/.bashrc
+source ~/.bashrc
+
+# Fetch quote for other instruments
+python3 test_instrument_fetcher.py --quote RELIANCE --token YOUR_ACCESS_TOKEN
+python3 test_instrument_fetcher.py --quote "BANK NIFTY" --token YOUR_ACCESS_TOKEN
+```
+
+**Note:** The backend also supports `DHAN_ACCESS_TOKEN` as a fallback. If you set it in your environment, you can omit the `--token` parameter in API requests, and the backend will automatically use the environment variable.
+
+**Note:** The `--quote` option will:
+1. First search for the instrument by name
+2. Extract the security_id and exchange_segment
+3. Fetch the market quote (current price, open, high, low, close, volume)
+4. Display formatted results with raw data for debugging
 

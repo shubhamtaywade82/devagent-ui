@@ -179,7 +179,7 @@ DHANHQ_TOOLS = [
                     "limit": {
                         "type": "integer",
                         "description": "Maximum number of results to return (default: 10)",
-                        "default": 10
+                        "default": 20
                     },
                     "exact_match": {
                         "type": "boolean",

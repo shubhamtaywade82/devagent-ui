@@ -8,8 +8,24 @@ routing them to the appropriate TradingService methods.
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import json
+import os
 from trading import trading_service
 from database import Database
+
+
+def get_access_token(access_token: Optional[str] = None) -> Optional[str]:
+    """
+    Get access token with fallback to environment variable.
+
+    Args:
+        access_token: Provided access token (from request/parameter)
+
+    Returns:
+        Access token from parameter or environment variable, or None if neither exists
+    """
+    if access_token:
+        return access_token
+    return os.getenv("DHAN_ACCESS_TOKEN")
 
 
 async def execute_tool(
@@ -28,10 +44,13 @@ async def execute_tool(
     Returns:
         Dict with function execution results
     """
+    # Use provided token or fallback to environment variable
+    access_token = get_access_token(access_token)
+
     if not access_token:
         return {
             "success": False,
-            "error": "Access token required for trading operations. Please authenticate first."
+            "error": "Access token required for trading operations. Please provide access_token parameter or set DHAN_ACCESS_TOKEN environment variable."
         }
 
     try:
@@ -145,8 +164,10 @@ async def find_instrument_by_segment(
     """
     Find a specific instrument by exchange segment and symbol (similar to Ruby gem's Instrument.find)
 
-    For EQUITY instruments: prefers underlying_symbol over symbol_name
-    For INDEX/other instruments: uses symbol_name
+    Matching priority (for all instrument types):
+    1. underlying_symbol (highest priority)
+    2. symbol_name
+    3. display_name (lowest priority)
 
     Args:
         exchange_segment: Exchange segment (e.g., "NSE_EQ", "IDX_I")
@@ -174,61 +195,59 @@ async def find_instrument_by_segment(
 
             matches = False
 
-            # For EQUITY instruments, prefer underlying_symbol over symbol_name (like Ruby gem)
-            if inst_type == "EQUITY" and inst.get("UNDERLYING_SYMBOL"):
-                instrument_symbol = inst.get("UNDERLYING_SYMBOL")
-                if not case_sensitive:
-                    instrument_symbol = instrument_symbol.upper()
+            # Priority-based matching: underlying_symbol > symbol_name > display_name
+            # Get all fields (normalize case if needed)
+            underlying_symbol = inst.get("UNDERLYING_SYMBOL") or ""
+            symbol_name = inst.get("SYMBOL_NAME") or ""
+            display_name = inst.get("DISPLAY_NAME") or ""
 
-                # Perform matching
+            if not case_sensitive:
+                underlying_symbol = underlying_symbol.upper()
+                symbol_name = symbol_name.upper()
+                display_name = display_name.upper()
+
+            # 1. Check underlying_symbol first (highest priority)
+            if underlying_symbol:
                 if exact_match:
-                    matches = instrument_symbol == search_symbol
+                    matches = underlying_symbol == search_symbol
                 else:
-                    matches = search_symbol in instrument_symbol
-            else:
-                # For INDEX and other instruments, MUST check both symbol_name AND underlying_symbol
-                symbol_name = inst.get("SYMBOL_NAME") or ""
-                underlying_symbol = inst.get("UNDERLYING_SYMBOL") or ""
+                    matches = search_symbol in underlying_symbol
 
-                if not case_sensitive:
-                    symbol_name = symbol_name.upper()
-                    underlying_symbol = underlying_symbol.upper()
+                if matches:
+                    print(f"Found match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')}")
 
-                # Check symbol_name
-                symbol_name_matches = False
-                if symbol_name:
+            # 2. If no match, check symbol_name (second priority)
+            if not matches and symbol_name:
+                if exact_match:
+                    matches = symbol_name == search_symbol
+                else:
+                    matches = search_symbol in symbol_name
+
+                if matches:
+                    print(f"Found match by symbol_name: {inst.get('SYMBOL_NAME')}")
+
+            # 3. If still no match, check display_name (third priority)
+            if not matches and display_name:
+                if exact_match:
+                    matches = display_name == search_symbol
+                else:
+                    matches = search_symbol in display_name
+
+                if matches:
+                    print(f"Found match by display_name: {inst.get('DISPLAY_NAME')}")
+
+            # 4. As last resort, check trading_symbol (lowest priority)
+            if not matches:
+                trading_symbol = inst.get("TRADING_SYMBOL") or ""
+                if trading_symbol:
+                    trading_symbol_upper = trading_symbol.upper() if not case_sensitive else trading_symbol
                     if exact_match:
-                        symbol_name_matches = symbol_name == search_symbol
+                        matches = trading_symbol_upper == search_symbol
                     else:
-                        symbol_name_matches = search_symbol in symbol_name
+                        matches = search_symbol in trading_symbol_upper
 
-                # Check underlying_symbol
-                underlying_symbol_matches = False
-                if underlying_symbol:
-                    if exact_match:
-                        underlying_symbol_matches = underlying_symbol == search_symbol
-                    else:
-                        underlying_symbol_matches = search_symbol in underlying_symbol
-
-                # Match if either symbol_name OR underlying_symbol matches
-                matches = symbol_name_matches or underlying_symbol_matches
-
-                # Also check display_name and trading_symbol as fallback
-                if not matches:
-                    display_name = (inst.get("DISPLAY_NAME") or "").upper() if not case_sensitive else (inst.get("DISPLAY_NAME") or "")
-                    trading_symbol = (inst.get("TRADING_SYMBOL") or "").upper() if not case_sensitive else (inst.get("TRADING_SYMBOL") or "")
-
-                    if display_name:
-                        if exact_match:
-                            matches = display_name == search_symbol
-                        else:
-                            matches = search_symbol in display_name
-
-                    if not matches and trading_symbol:
-                        if exact_match:
-                            matches = trading_symbol == search_symbol
-                        else:
-                            matches = search_symbol in trading_symbol
+                    if matches:
+                        print(f"Found match by trading_symbol: {trading_symbol}")
 
             if matches:
                 security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
@@ -267,8 +286,10 @@ async def search_instruments(
     """
     Search for instruments/securities (similar to Ruby gem's Instrument.find and find_anywhere)
 
-    For EQUITY instruments: prefers underlying_symbol over symbol_name
-    For INDEX/other instruments: uses symbol_name
+    Matching priority (for all instrument types):
+    1. underlying_symbol (highest priority)
+    2. symbol_name
+    3. display_name (lowest priority)
 
     Args:
         query: Search query (symbol name, trading symbol, etc.)

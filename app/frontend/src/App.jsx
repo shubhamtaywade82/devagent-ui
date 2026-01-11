@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import LandingPage from './pages/LandingPage'
 import EditorPage from './pages/EditorPage'
 import TradingPage from './pages/TradingPage'
+import TradingAIPage from './pages/TradingAIPage'
 
 function App() {
   return (
@@ -10,6 +11,7 @@ function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/editor/:projectId" element={<EditorPage />} />
         <Route path="/trading" element={<TradingPage />} />
+        <Route path="/trading/ai" element={<TradingAIPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

@@ -196,7 +196,7 @@ function TradingChat({ accessToken }) {
   ];
 
   return (
-    <div className="h-full flex flex-col bg-zinc-900/50 border-l border-zinc-800">
+    <div className="h-full flex flex-col bg-zinc-900/50">
       <div className="p-4 border-b border-zinc-800">
         <h2 className="text-sm font-semibold text-zinc-300 flex items-center gap-2">
           <TrendingUp className="w-4 h-4 text-green-500" />

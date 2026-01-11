@@ -112,6 +112,7 @@ The application requires Ollama to be running locally at `localhost:11434` with 
   - **AI Provider**: Configure `OLLAMA_BASE_URL`, `OLLAMA_MODEL` for Ollama
   - **OR**: Configure `OPENAI_API_BASE`, `OPENAI_API_MODEL`, `USE_OPENAI_API=true` for OpenAI-compatible APIs
   - **Trading**: Configure `DHAN_CLIENT_ID`, `DHAN_APP_ID`, `DHAN_APP_SECRET` for DhanHQ
+  - **Access Token Fallback**: Set `DHAN_ACCESS_TOKEN` in environment to use as fallback when access_token is not provided in API requests (useful for testing and development)
 - **Frontend**: Uses `VITE_BACKEND_URL` from `/app/frontend/.env`
 
 See [AI_PROVIDERS.md](AI_PROVIDERS.md) for AI provider configuration.

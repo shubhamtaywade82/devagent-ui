@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   TrendingUp,
@@ -8,6 +9,7 @@ import {
   LogIn,
   MessageSquare,
   X,
+  ExternalLink,
 } from "lucide-react";
 import TradingDashboard from "../components/trading/TradingDashboard";
 import OrderPlacement from "../components/trading/OrderPlacement";
@@ -20,6 +22,7 @@ import IndexIndicators from "../components/trading/IndexIndicators";
 import api from "../services/api";
 
 function TradingPage() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [accessToken, setAccessToken] = useState(null);
@@ -94,16 +97,25 @@ function TradingPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => navigate("/trading/ai")}
+            className="px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-green-600 hover:bg-green-500 text-white"
+            title="Open Trading AI Assistant in full page"
+          >
+            <MessageSquare className="w-4 h-4 inline mr-2" />
+            AI Assistant
+            <ExternalLink className="w-3 h-3 inline ml-2" />
+          </button>
+          <button
             onClick={() => setShowChat(!showChat)}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
               showChat
-                ? "bg-green-600 hover:bg-green-500 text-white"
+                ? "bg-zinc-700 hover:bg-zinc-600 text-white"
                 : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300"
             }`}
-            title="Toggle AI Trading Assistant"
+            title="Toggle AI Trading Assistant Sidebar"
           >
             <MessageSquare className="w-4 h-4 inline mr-2" />
-            {showChat ? "Hide Chat" : "AI Assistant"}
+            {showChat ? "Hide Sidebar" : "Chat Sidebar"}
           </button>
           <button
             onClick={handleLogout}

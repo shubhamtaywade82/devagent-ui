@@ -15,7 +15,7 @@ from database import Database
 from models import Project, File, ChatMessage
 from trading import trading_service
 from tools import DHANHQ_TOOLS
-from tool_executor import execute_tool
+from tool_executor import execute_tool, get_access_token
 
 
 def format_market_quote_result(data):
@@ -74,7 +74,7 @@ def format_market_quote_result(data):
         # Try various field name formats from DhanHQ API
         symbol = (quote_data.get("symbol") or quote_data.get("SYMBOL") or
                  quote_data.get("tradingSymbol") or quote_data.get("TRADING_SYMBOL") or
-                 quote_data.get("name") or quote_data.get("NAME") or "NIFTY 50")
+                 quote_data.get("name") or quote_data.get("NAME") or "N/A")
 
         ltp = (quote_data.get("LTP") or quote_data.get("ltp") or
               quote_data.get("lastPrice") or quote_data.get("LAST_PRICE") or
@@ -384,7 +384,7 @@ class ModifyOrderRequest(BaseModel):
 
 
 class MarketQuoteRequest(BaseModel):
-    access_token: str
+    access_token: Optional[str] = None  # Optional - can use DHAN_ACCESS_TOKEN env var as fallback
     securities: dict
 
 
@@ -396,7 +396,7 @@ class OptionChainRequest(BaseModel):
 
 
 class HistoricalDataRequest(BaseModel):
-    access_token: str
+    access_token: Optional[str] = None  # Optional - can use DHAN_ACCESS_TOKEN env var as fallback
     security_id: Union[int, str]  # Accept both int and string (official example uses string)
     exchange_segment: str
     instrument_type: str
@@ -652,6 +652,8 @@ async def generate_ollama_router_response(prompt: str, task: Optional[str] = Non
 
 async def generate_openai_response(prompt: str, tools=None, messages=None, access_token=None):
     """Generate non-streaming response from OpenAI-compatible API with optional tool calling"""
+    # Use provided token or fallback to environment variable
+    access_token = get_access_token(access_token)
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OPENAI_API_BASE}/chat/completions"
@@ -977,8 +979,10 @@ Provide a helpful, concise response with code examples when relevant."""
 async def chat_stream(request: ChatRequest):
     """Streaming chat endpoint with optional trading support"""
     try:
+        # Use provided token or fallback to environment variable
+        access_token = get_access_token(request.access_token)
         # Determine if this is a trading request
-        is_trading_request = request.access_token is not None or request.task == "trading"
+        is_trading_request = access_token is not None or request.task == "trading"
 
         # Build context-aware prompt
         context_parts = []
@@ -1094,7 +1098,7 @@ IMPORTANT: Always search for instruments first if the user mentions a stock/inde
                         prompt=None,  # Not used when messages are provided
                         tools=tools_to_use,
                         messages=messages_list,
-                        access_token=request.access_token if is_trading_request else None
+                        access_token=access_token if is_trading_request else None
                     )
                     content = response.get("response", "")
                     # Send content in chunks to simulate streaming
@@ -1378,7 +1382,12 @@ async def get_funds(request: TradingAuthRequest):
 @app.post("/api/trading/market/quote")
 async def get_market_quote(request: MarketQuoteRequest):
     """Get market quote data"""
-    result = trading_service.get_market_quote(request.access_token, request.securities)
+    # Use provided token or fallback to environment variable
+    access_token = get_access_token(request.access_token)
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Access token required. Provide access_token in request or set DHAN_ACCESS_TOKEN environment variable.")
+
+    result = trading_service.get_market_quote(access_token, request.securities)
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to get market quote"))
     return result
@@ -1420,11 +1429,16 @@ async def get_historical_data(request: HistoricalDataRequest):
         "interval": "daily"  # or "intraday" or "minute"
     }
     """
+    # Use provided token or fallback to environment variable
+    access_token = get_access_token(request.access_token)
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Access token required. Provide access_token in request or set DHAN_ACCESS_TOKEN environment variable.")
+
     # Convert security_id to int for the method (it will convert to string internally)
     security_id = int(request.security_id) if isinstance(request.security_id, str) else request.security_id
 
     result = trading_service.get_historical_data(
-        request.access_token,
+        access_token,
         security_id,
         request.exchange_segment,
         request.instrument_type,
