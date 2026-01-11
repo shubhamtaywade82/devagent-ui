@@ -584,7 +584,8 @@ class TradingService:
             headers = {}
 
             # Fetch instrument list using async client
-            async with httpx.AsyncClient() as client:
+            # Note: DhanHQ API returns 302 redirect to CSV file, so we need to follow redirects
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 response = await client.get(url, headers=headers, timeout=30.0)
 
                 # Get response text first for debugging
@@ -595,7 +596,7 @@ class TradingService:
                     pass
 
                 # Check response status
-                if response.status_code != 200:
+                if response.status_code not in [200, 302]:
                     error_msg = response_text or f"HTTP {response.status_code}"
                     try:
                         error_json = response.json()
@@ -610,29 +611,52 @@ class TradingService:
                         "response_text": response_text[:500] if response_text else ""  # Include first 500 chars for debugging
                     }
 
-                # Parse JSON response
-                try:
-                    data = response.json()
-                except json.JSONDecodeError as e:
-                    return {
-                        "success": False,
-                        "error": f"Invalid JSON response from API: {str(e)}",
-                        "url": url,
-                        "response_text": response_text[:500] if response_text else ""
-                    }
+                # Check if response is CSV (DhanHQ returns CSV for instrument lists via redirect)
+                content_type = response.headers.get("content-type", "").lower()
+                # Check if it's CSV: content-type contains csv, or starts with CSV headers (EXCH_ID, SECURITY_ID, etc.)
+                is_csv = (
+                    "csv" in content_type or
+                    (response_text and response_text.strip().startswith(("SECURITY_ID", "EXCH_ID", "SYMBOL_NAME"))) or
+                    (response_text and len(response_text) > 50 and "," in response_text[:200] and "\n" in response_text[:500])
+                )
 
-                # Handle case where API returns error in JSON
-                if isinstance(data, dict):
-                    if "status" in data and data.get("status") != "success":
-                        error_msg = data.get("message") or data.get("error") or data.get("detail") or "Unknown error from API"
+                if is_csv:
+                    # Parse CSV response
+                    try:
+                        import io
+                        csv_reader = csv.DictReader(io.StringIO(response_text))
+                        data = list(csv_reader)
+                    except Exception as e:
                         return {
                             "success": False,
-                            "error": error_msg,
-                            "url": url
+                            "error": f"Invalid CSV response from API: {str(e)}",
+                            "url": url,
+                            "response_text": response_text[:500] if response_text else ""
                         }
-                    # Some APIs return data wrapped in a "data" field
-                    if "data" in data and isinstance(data["data"], list):
-                        data = data["data"]
+                else:
+                    # Parse JSON response
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError as e:
+                        return {
+                            "success": False,
+                            "error": f"Invalid JSON response from API: {str(e)}",
+                            "url": url,
+                            "response_text": response_text[:500] if response_text else ""
+                        }
+
+                    # Handle case where API returns error in JSON
+                    if isinstance(data, dict):
+                        if "status" in data and data.get("status") != "success":
+                            error_msg = data.get("message") or data.get("error") or data.get("detail") or "Unknown error from API"
+                            return {
+                                "success": False,
+                                "error": error_msg,
+                                "url": url
+                            }
+                        # Some APIs return data wrapped in a "data" field
+                        if "data" in data and isinstance(data["data"], list):
+                            data = data["data"]
 
             return {
                 "success": True,

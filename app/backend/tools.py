@@ -180,6 +180,16 @@ DHANHQ_TOOLS = [
                         "type": "integer",
                         "description": "Maximum number of results to return (default: 10)",
                         "default": 10
+                    },
+                    "exact_match": {
+                        "type": "boolean",
+                        "description": "Whether to perform exact symbol matching (default: false). If true, symbol must match exactly.",
+                        "default": False
+                    },
+                    "case_sensitive": {
+                        "type": "boolean",
+                        "description": "Whether the search should be case sensitive (default: false)",
+                        "default": False
                     }
                 },
                 "required": ["query"]

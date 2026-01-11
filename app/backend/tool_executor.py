@@ -37,12 +37,14 @@ async def execute_tool(
     try:
         # Route to appropriate TradingService method
         if function_name == "search_instruments":
-            # Search instruments in database
+            # Search instruments (supports exact_match and case_sensitive like Ruby gem)
             return await search_instruments(
                 function_args.get("query", ""),
                 function_args.get("exchange_segment"),
                 function_args.get("instrument_type"),
-                function_args.get("limit", 10)
+                function_args.get("limit", 10),
+                function_args.get("exact_match", False),
+                function_args.get("case_sensitive", False)
             )
         elif function_name == "get_market_quote":
             # Handle IDX_I format for indices - convert to proper format for DhanHQ API
@@ -134,27 +136,257 @@ async def execute_tool(
         }
 
 
+async def find_instrument_by_segment(
+    exchange_segment: str,
+    symbol: str,
+    exact_match: bool = False,
+    case_sensitive: bool = False
+) -> Optional[Dict[str, Any]]:
+    """
+    Find a specific instrument by exchange segment and symbol (similar to Ruby gem's Instrument.find)
+
+    For EQUITY instruments: prefers underlying_symbol over symbol_name
+    For INDEX/other instruments: uses symbol_name
+
+    Args:
+        exchange_segment: Exchange segment (e.g., "NSE_EQ", "IDX_I")
+        symbol: Symbol name to search for
+        exact_match: Whether to perform exact matching (default: False)
+        case_sensitive: Whether search should be case sensitive (default: False)
+
+    Returns:
+        Dict with instrument data or None if not found
+    """
+    try:
+        # Fetch instruments from API for the segment
+        segment_result = await trading_service.get_instrument_list_segmentwise(exchange_segment)
+        if not segment_result.get("success") or not segment_result.get("data", {}).get("instruments"):
+            print(f"Warning: Failed to fetch instruments for segment {exchange_segment}: {segment_result.get('error', 'Unknown error')}")
+            return None
+
+        instruments = segment_result["data"]["instruments"]
+        search_symbol = symbol if case_sensitive else symbol.upper()
+        print(f"Searching for '{search_symbol}' in {len(instruments)} instruments from segment {exchange_segment}")
+
+        for inst in instruments:
+            # Get instrument type
+            inst_type = (inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "").upper()
+
+            matches = False
+
+            # For EQUITY instruments, prefer underlying_symbol over symbol_name (like Ruby gem)
+            if inst_type == "EQUITY" and inst.get("UNDERLYING_SYMBOL"):
+                instrument_symbol = inst.get("UNDERLYING_SYMBOL")
+                if not case_sensitive:
+                    instrument_symbol = instrument_symbol.upper()
+
+                # Perform matching
+                if exact_match:
+                    matches = instrument_symbol == search_symbol
+                else:
+                    matches = search_symbol in instrument_symbol
+            else:
+                # For INDEX and other instruments, MUST check both symbol_name AND underlying_symbol
+                symbol_name = inst.get("SYMBOL_NAME") or ""
+                underlying_symbol = inst.get("UNDERLYING_SYMBOL") or ""
+
+                if not case_sensitive:
+                    symbol_name = symbol_name.upper()
+                    underlying_symbol = underlying_symbol.upper()
+
+                # Check symbol_name
+                symbol_name_matches = False
+                if symbol_name:
+                    if exact_match:
+                        symbol_name_matches = symbol_name == search_symbol
+                    else:
+                        symbol_name_matches = search_symbol in symbol_name
+
+                # Check underlying_symbol
+                underlying_symbol_matches = False
+                if underlying_symbol:
+                    if exact_match:
+                        underlying_symbol_matches = underlying_symbol == search_symbol
+                    else:
+                        underlying_symbol_matches = search_symbol in underlying_symbol
+
+                # Match if either symbol_name OR underlying_symbol matches
+                matches = symbol_name_matches or underlying_symbol_matches
+
+                # Also check display_name and trading_symbol as fallback
+                if not matches:
+                    display_name = (inst.get("DISPLAY_NAME") or "").upper() if not case_sensitive else (inst.get("DISPLAY_NAME") or "")
+                    trading_symbol = (inst.get("TRADING_SYMBOL") or "").upper() if not case_sensitive else (inst.get("TRADING_SYMBOL") or "")
+
+                    if display_name:
+                        if exact_match:
+                            matches = display_name == search_symbol
+                        else:
+                            matches = search_symbol in display_name
+
+                    if not matches and trading_symbol:
+                        if exact_match:
+                            matches = trading_symbol == search_symbol
+                        else:
+                            matches = search_symbol in trading_symbol
+
+            if matches:
+                security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
+                exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
+                segment = inst.get("SEGMENT") or inst.get("SEM_SEGMENT") or ""
+
+                print(f"Found match: {inst.get('SYMBOL_NAME')} / {inst.get('DISPLAY_NAME')} / {inst.get('UNDERLYING_SYMBOL')} (Security ID: {security_id})")
+
+                return {
+                    "security_id": int(security_id) if security_id else None,
+                    "exchange_segment": exchange_segment,
+                    "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
+                    "trading_symbol": inst.get("TRADING_SYMBOL", ""),
+                    "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
+                    "underlying_symbol": inst.get("UNDERLYING_SYMBOL", ""),
+                    "instrument_type": inst_type,
+                    "exchange": exchange,
+                    "segment": segment
+                }
+
+        print(f"No match found for '{search_symbol}' in segment {exchange_segment}")
+        return None
+    except Exception as e:
+        print(f"Error in find_instrument_by_segment: {str(e)}")
+        return None
+
+
 async def search_instruments(
     query: str,
     exchange_segment: Optional[str] = None,
     instrument_type: Optional[str] = None,
-    limit: int = 10
+    limit: int = 10,
+    exact_match: bool = False,
+    case_sensitive: bool = False
 ) -> Dict[str, Any]:
     """
-    Search for instruments/securities in the database
+    Search for instruments/securities (similar to Ruby gem's Instrument.find and find_anywhere)
+
+    For EQUITY instruments: prefers underlying_symbol over symbol_name
+    For INDEX/other instruments: uses symbol_name
 
     Args:
         query: Search query (symbol name, trading symbol, etc.)
-        exchange_segment: Optional exchange segment filter
+        exchange_segment: Optional exchange segment filter (if None, searches common segments)
         instrument_type: Optional instrument type filter
         limit: Maximum number of results
+        exact_match: Whether to perform exact matching (default: False)
+        case_sensitive: Whether search should be case sensitive (default: False)
 
     Returns:
         Dict with search results including security_id, exchange_segment, etc.
     """
     try:
-        db = Database()
-        query_upper = query.upper().strip()
+        # If exchange_segment is provided, use find_instrument_by_segment (like Ruby gem's find)
+        if exchange_segment:
+            result = await find_instrument_by_segment(exchange_segment, query, exact_match, case_sensitive)
+            if result:
+                return {
+                    "success": True,
+                    "data": {
+                        "instruments": [result],
+                        "count": 1,
+                        "query": query
+                    }
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"No instrument found matching '{query}' in segment '{exchange_segment}'"
+                }
+
+        # If no exchange_segment, search across common segments (like Ruby gem's find_anywhere)
+        common_segments = ["NSE_EQ", "BSE_EQ", "IDX_I", "NSE_FO", "BSE_FO"]
+        if instrument_type:
+            # Filter segments based on instrument type
+            if instrument_type.upper() == "INDEX":
+                common_segments = ["IDX_I"]
+            elif instrument_type.upper() == "EQUITY":
+                common_segments = ["NSE_EQ", "BSE_EQ"]
+            elif instrument_type.upper() in ["FUTURES", "OPTIONS"]:
+                common_segments = ["NSE_FO", "BSE_FO"]
+
+        # Try each segment until we find a match
+        for segment in common_segments:
+            result = await find_instrument_by_segment(segment, query, exact_match, case_sensitive)
+            if result:
+                return {
+                    "success": True,
+                    "data": {
+                        "instruments": [result],
+                        "count": 1,
+                        "query": query
+                    }
+                }
+
+        # If no match found, try to fetch and show sample instruments for debugging
+        # Start with IDX_I for index queries, or NSE_EQ for others
+        sample_segment = "IDX_I" if (instrument_type and instrument_type.upper() == "INDEX") or "NIFTY" in query.upper() or "SENSEX" in query.upper() else "NSE_EQ"
+        segment_result = await trading_service.get_instrument_list_segmentwise(sample_segment)
+
+        sample_instruments = []
+        if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
+            idx_instruments = segment_result["data"]["instruments"]
+            # Show first 30 instruments and also search for any that might match
+            query_upper = query.upper()
+            for inst in idx_instruments[:30]:
+                underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or "").upper().strip()
+                symbol_name = (inst.get("SYMBOL_NAME") or "").upper().strip()
+                display_name = (inst.get("DISPLAY_NAME") or "").upper().strip()
+                trading_symbol = (inst.get("TRADING_SYMBOL") or "").upper().strip()
+                security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or ""
+                inst_type = (inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "").upper()
+
+                # Check if this might be a match (for debugging)
+                might_match = False
+                if query_upper in symbol_name or query_upper in display_name or query_upper in underlying_symbol or query_upper in trading_symbol:
+                    might_match = True
+
+                sample_instruments.append({
+                    "underlying_symbol": underlying_symbol,
+                    "symbol_name": symbol_name,
+                    "display_name": display_name,
+                    "trading_symbol": trading_symbol,
+                    "security_id": security_id,
+                    "instrument_type": inst_type,
+                    "might_match": might_match  # Flag potential matches
+                })
+
+        # Find potential matches in sample instruments for better error message
+        potential_matches = [inst for inst in sample_instruments if inst.get("might_match", False)]
+
+        error_msg = f"No instruments found matching '{query}' across segments {common_segments}."
+        if potential_matches:
+            error_msg += f"\n\nFound {len(potential_matches)} potential matches in sample instruments:"
+            for match in potential_matches[:5]:
+                error_msg += f"\n  - {match.get('symbol_name')} (symbol_name) / {match.get('display_name')} (display_name) / {match.get('underlying_symbol')} (underlying_symbol) / {match.get('trading_symbol')} (trading_symbol) - Security ID: {match.get('security_id')}"
+
+        return {
+            "success": False,
+            "error": error_msg,
+            "data": {
+                "query": query,
+                "searched_segments": common_segments,
+                "sample_instruments": sample_instruments[:20] if sample_instruments else None,
+                "potential_matches": potential_matches[:5] if potential_matches else [],
+                "hint": "For EQUITY instruments, search uses underlying_symbol. For INDEX instruments, search checks symbol_name, display_name, underlying_symbol, and trading_symbol. Check sample_instruments to see available fields."
+            }
+        }
+
+    except Exception as e:
+        error_detail = str(e) if str(e) else repr(e)
+        import traceback
+        print(f"Error in search_instruments: {error_detail}")
+        print(traceback.format_exc())
+        return {
+            "success": False,
+            "error": f"Error searching instruments: {error_detail}"
+        }
 
         # Normalize common index queries and detect if it's an index query
         is_index_query = False
