@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { TrendingUp } from "lucide-react";
+import { TrendingUp, Wifi, WifiOff, Activity } from "lucide-react";
 import api from "../../services/api";
-import RealTimeMarketFeed from "./RealTimeMarketFeed";
+import TradingWebSocket from "../../services/websocket";
 import OptionChain from "./OptionChain";
 
 function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared }) {
@@ -10,6 +10,107 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const fetchTimeoutRef = useRef(null);
+
+  // Real-time feed state
+  const [realTimeData, setRealTimeData] = useState(null);
+  const [isFeedConnected, setIsFeedConnected] = useState(false);
+  const [feedError, setFeedError] = useState("");
+  const wsRef = useRef(null);
+
+  // Real-time feed WebSocket connection
+  useEffect(() => {
+    if (!accessToken || !selectedInstrument?.securityId || !selectedInstrument?.exchangeSegment) {
+      // Disconnect if no instrument selected
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+        wsRef.current = null;
+      }
+      setRealTimeData(null);
+      setIsFeedConnected(false);
+      return;
+    }
+
+    // Create WebSocket connection
+    const ws = new TradingWebSocket(
+      "/ws/trading/market-feed/{access_token}",
+      accessToken,
+      (data) => {
+        if (data.type === "market_feed") {
+          // Handle different data structures from backend
+          let feedData = data.data;
+
+          // If data is an array, find the matching security ID
+          if (Array.isArray(feedData)) {
+            const securityIdStr = selectedInstrument.securityId.toString();
+            feedData = feedData.find(
+              (item) =>
+                item.security_id === securityIdStr ||
+                item.securityId === securityIdStr ||
+                item.SECURITY_ID === securityIdStr ||
+                item.id === securityIdStr
+            ) || feedData[0]; // Fallback to first item if no match
+          }
+
+          // Normalize field names - handle various formats
+          if (feedData && typeof feedData === "object") {
+            const normalizedData = {
+              lastPrice: feedData.lastPrice || feedData.LTP || feedData.last_price || feedData.last_traded_price || feedData.currentPrice || feedData.CURRENT_PRICE,
+              change: feedData.change || feedData.CHANGE || feedData.priceChange || feedData.price_change,
+              changePercent: feedData.changePercent || feedData.change_percent || feedData.CHANGE_PERCENT || feedData.priceChangePercent,
+              ...feedData
+            };
+            setRealTimeData(normalizedData);
+          } else {
+            setRealTimeData(feedData);
+          }
+          setFeedError("");
+        } else if (data.type === "connected") {
+          setIsFeedConnected(true);
+        } else if (data.type === "market_status") {
+          if (data.status === "no_data") {
+            setFeedError(data.message || "No market data updates. Market may be closed.");
+          }
+        } else if (data.type === "error") {
+          setFeedError(data.message);
+        }
+      },
+      (err) => {
+        setFeedError("WebSocket connection error");
+        setIsFeedConnected(false);
+      },
+      () => {
+        setIsFeedConnected(false);
+      }
+    );
+
+    ws.connect();
+    wsRef.current = ws;
+
+    // Send subscription request after connection
+    setTimeout(() => {
+      if (ws.ws && ws.ws.readyState === WebSocket.OPEN) {
+        ws.send({
+          RequestCode: 17, // 17 = Subscribe - Quote Packet (per DhanHQ Annexure)
+          InstrumentCount: 1,
+          InstrumentList: [
+            {
+              ExchangeSegment: selectedInstrument.exchangeSegment || "NSE_EQ",
+              SecurityId: selectedInstrument.securityId.toString(),
+            },
+          ],
+          version: "v2",
+        });
+        setIsFeedConnected(true);
+      }
+    }, 1000);
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.disconnect();
+        wsRef.current = null;
+      }
+    };
+  }, [accessToken, selectedInstrument?.securityId, selectedInstrument?.exchangeSegment]);
 
   // Handle initial instrument from header search
   useEffect(() => {
@@ -302,52 +403,96 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
 
       {quoteData && selectedInstrument && (
         <>
-          {/* Quote Data - Combined LTP and OHLC */}
-          <div className="glass rounded-xl p-6 mb-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Left Side - Last Traded Price */}
-              <div>
-                <div className="text-sm text-zinc-400 mb-2">Last Traded Price</div>
-                <div className="text-5xl font-bold text-green-500 mb-4">
-                  ₹{quoteData.last_price?.toFixed(2) || "0.00"}
-                </div>
-                <div className="text-xs text-zinc-500">
-                  Security ID: {quoteData.securityId} | Exchange:{" "}
-                  {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
-                  {selectedInstrument?.underlyingSymbol && (
-                    <> | Underlying: <span className="text-zinc-400">{selectedInstrument.underlyingSymbol}</span></>
+          {/* Top Row - LTP and Option Chain */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+            {/* Left Side - Last Traded Price with Real-Time Feed integrated */}
+            <div className="glass rounded-lg p-3">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-xs text-zinc-400">Last Traded Price</div>
+                <div className="flex items-center gap-1.5">
+                  {isFeedConnected && realTimeData ? (
+                    <>
+                      <Activity className="w-3 h-3 text-green-500 animate-pulse" />
+                      <Wifi className="w-3 h-3 text-green-500" />
+                      <span className="text-xs text-green-500">Live</span>
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="w-3 h-3 text-zinc-500" />
+                      <span className="text-xs text-zinc-500">LTP</span>
+                    </>
                   )}
                 </div>
               </div>
 
-              {/* Right Side - OHLC Data */}
+              {/* Show real-time data if connected and available, otherwise show LTP from quote */}
+              <div className="text-3xl font-bold text-green-500 mb-1">
+                ₹{isFeedConnected && realTimeData?.lastPrice !== undefined && realTimeData?.lastPrice !== null
+                  ? (typeof realTimeData.lastPrice === 'number'
+                      ? realTimeData.lastPrice.toFixed(2)
+                      : parseFloat(realTimeData.lastPrice)?.toFixed(2) || quoteData.last_price?.toFixed(2) || "0.00")
+                  : quoteData.last_price?.toFixed(2) || "0.00"}
+              </div>
+
+              <div className="text-xs text-zinc-500 mb-1.5 leading-tight">
+                Security ID: {quoteData.securityId} | Exchange:{" "}
+                {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
+                {selectedInstrument?.underlyingSymbol && (
+                  <> | Underlying: <span className="text-zinc-400">{selectedInstrument.underlyingSymbol}</span></>
+                )}
+              </div>
+
+              {/* Show real-time change if available */}
+              {isFeedConnected && realTimeData?.change !== undefined && (
+                <div className={`text-sm font-semibold mb-1.5 ${
+                  (realTimeData.change || 0) >= 0 ? "text-green-400" : "text-red-400"
+                }`}>
+                  {realTimeData.change >= 0 ? "+" : ""}
+                  {realTimeData.change.toFixed(2)}
+                  {realTimeData.changePercent !== undefined && (
+                    <span className="text-xs ml-1">
+                      ({realTimeData.changePercent >= 0 ? "+" : ""}
+                      {realTimeData.changePercent.toFixed(2)}%)
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Show feed error if any */}
+              {feedError && (
+                <div className="mb-1.5 p-1.5 bg-red-500/20 border border-red-500/50 rounded text-red-400 text-xs">
+                  {feedError}
+                </div>
+              )}
+
+              {/* OHLC Data - Compact grid layout */}
               {quoteData.ohlc && (
-                <div>
-                  <h4 className="text-sm font-medium text-zinc-400 mb-4">
+                <div className="mt-2.5 pt-2.5 border-t border-zinc-800">
+                  <h4 className="text-xs font-medium text-zinc-400 mb-1.5">
                     OHLC (Open, High, Low, Close)
                   </h4>
-                  <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-zinc-500">Open</span>
-                      <span className="text-lg font-semibold text-white">
+                      <span className="text-xs text-zinc-500">Open</span>
+                      <span className="text-sm font-semibold text-white">
                         ₹{quoteData.ohlc.open?.toFixed(2) || "0.00"}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-zinc-500">High</span>
-                      <span className="text-lg font-semibold text-green-400">
+                      <span className="text-xs text-zinc-500">High</span>
+                      <span className="text-sm font-semibold text-green-400">
                         ₹{quoteData.ohlc.high?.toFixed(2) || "0.00"}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-zinc-500">Low</span>
-                      <span className="text-lg font-semibold text-red-400">
+                      <span className="text-xs text-zinc-500">Low</span>
+                      <span className="text-sm font-semibold text-red-400">
                         ₹{quoteData.ohlc.low?.toFixed(2) || "0.00"}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-sm text-zinc-500">Close</span>
-                      <span className="text-lg font-semibold text-white">
+                      <span className="text-xs text-zinc-500">Close</span>
+                      <span className="text-sm font-semibold text-white">
                         ₹{quoteData.ohlc.close?.toFixed(2) || "0.00"}
                       </span>
                     </div>
@@ -355,20 +500,8 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
                 </div>
               )}
             </div>
-          </div>
 
-          {/* Bottom Row - Real-Time Feed and Option Chain */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            {/* Real-Time Market Feed */}
-            <div>
-              <RealTimeMarketFeed
-                accessToken={accessToken}
-                securityId={parseInt(selectedInstrument.securityId)}
-                exchangeSegment={selectedInstrument.exchangeSegment || "NSE_EQ"}
-              />
-            </div>
-
-            {/* Option Chain - Only for indices */}
+            {/* Right Side - Option Chain */}
             <div>
               <OptionChain
                 accessToken={accessToken}
