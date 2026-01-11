@@ -22,22 +22,14 @@ class GetQuoteTool(Tool):
     """Get real-time market quote (OHLC data) for securities"""
 
     name = "get_quote"
-    description = "Get real-time market quote (OHLC data) for securities. Returns current price, open, high, low, close, volume, and other market data. Use this to check current prices and market status."
+    description = "Get real-time market quote (OHLC data) for securities. Returns current price (LTP), open, high, low, close, volume, and other market data. MANDATORY WORKFLOW: If user asks about price by NAME (e.g., 'NIFTY', 'HDFC Bank'), you MUST AUTOMATICALLY call find_instrument first to resolve the symbol, then call get_quote with the returned security_id and exchange_segment. NEVER ask the user for security_id, exchange_segment, or currency - these are internal resolution steps. The 'securities' parameter must be a dictionary: {exchange_segment: [security_id]}, e.g., {'IDX_I': [13]} for NIFTY."
 
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "securities": {
-                "type": "object",
-                "description": "Dictionary mapping exchange segments to list of security IDs. Example: {'NSE_EQ': [1333, 11536]} for HDFC Bank and Reliance, or {'IDX_I': [13]} for NIFTY 50",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "integer"}
-                }
-            }
-        },
-        "required": ["securities"]
-    }
+    try:
+        from agent.validation.schemas import MarketQuoteSchema
+    except ImportError:
+        from app.agent.validation.schemas import MarketQuoteSchema
+
+    input_schema = MarketQuoteSchema
 
     output_schema = {
         "type": "object",
@@ -99,7 +91,10 @@ class GetQuoteTool(Tool):
 
             return {
                 "success": True,
-                "quotes": quotes
+                # Preserve raw API response shape for existing formatters
+                "data": data,
+                # Also provide a normalized list for LLMs/clients that prefer it
+                "quotes": quotes,
             }
         else:
             return {"success": False, "error": result.get("error", "Failed to fetch quotes")}

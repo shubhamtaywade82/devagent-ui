@@ -34,29 +34,28 @@ class GetHistoricalDataTool(Tool):
             "exchange_segment": {
                 "type": "string",
                 "description": "Exchange segment where the security is traded (use IDX_I for indices like NIFTY, SENSEX)",
-                "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_COM", "NCDEX_COM", "IDX_I"]
+                "enum": ["NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO", "MCX_COM", "NCDEX_COM", "IDX_I", "NSE_FNO", "BSE_FNO", "MCX_COMM"]
             },
             "instrument_type": {
                 "type": "string",
                 "description": "Type of instrument (use INDEX for indices like NIFTY, SENSEX)",
-                "enum": ["EQUITY", "FUTURES", "OPTIONS", "INDEX"]
+                "enum": ["EQUITY", "INDEX", "FUTURES", "OPTIONS", "FUT", "OPT"]
             },
             "from_date": {
                 "type": "string",
-                "description": "Start date in YYYY-MM-DD format (e.g., '2024-01-01') for daily data, or YYYY-MM-DD HH:MM:SS format (e.g., '2024-01-01 09:15:00') for intraday data. For intraday, use market hours (09:15:00 to 15:30:00)."
+                "description": "Start date in YYYY-MM-DD format (e.g., '2024-01-01')."
             },
             "to_date": {
                 "type": "string",
-                "description": "End date in YYYY-MM-DD format (e.g., '2024-01-31') for daily data, or YYYY-MM-DD HH:MM:SS format (e.g., '2024-01-31 15:30:00') for intraday data. For intraday, use market hours (09:15:00 to 15:30:00)."
+                "description": "End date in YYYY-MM-DD format (e.g., '2024-01-31')."
             },
             "interval": {
                 "type": "string",
-                "description": "Data interval - 'daily' for daily candles, or numeric string ('1', '5', '15', '25', '60') for intraday minute data. For intraday, intervals are in minutes: 1, 5, 15, 25, or 60 minutes.",
-                "enum": ["daily", "1", "5", "15", "25", "60", "intraday", "minute"],
-                "default": "daily"
+                "description": "Data interval. Use 'daily' for daily candles, or one of '1','5','15','25','60' for intraday minutes.",
+                "enum": ["daily", "1", "5", "15", "25", "60"]
             }
         },
-        "required": ["security_id", "exchange_segment", "instrument_type", "from_date", "to_date"]
+        "required": ["security_id", "exchange_segment", "instrument_type", "interval", "from_date", "to_date"]
     }
 
     output_schema = {
@@ -103,7 +102,7 @@ class GetHistoricalDataTool(Tool):
         instrument_type = kwargs["instrument_type"]
         from_date = kwargs["from_date"]
         to_date = kwargs["to_date"]
-        interval = kwargs.get("interval", "daily")
+        interval = kwargs["interval"]
 
         result = trading_service.get_historical_data(
             access_token,

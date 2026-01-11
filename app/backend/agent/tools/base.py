@@ -51,14 +51,27 @@ class Tool(ABC):
         Returns:
             Tuple of (is_valid, error_message)
         """
-        # Basic validation - check required fields
-        required = self.input_schema.get("required", [])
-        for field in required:
-            if field not in kwargs:
-                return False, f"Missing required field: {field}"
+        # Prefer full JSON Schema validation when available.
+        try:
+            from jsonschema import Draft7Validator  # type: ignore
 
-        # Type validation can be added here if needed
-        return True, None
+            validator = Draft7Validator(self.input_schema)
+            errors = sorted(validator.iter_errors(kwargs), key=lambda e: e.path)
+            if errors:
+                # Return the first error for brevity; guard layer can provide richer output.
+                err = errors[0]
+                path = ".".join([str(p) for p in err.path]) if err.path else None
+                if path:
+                    return False, f"Invalid value for '{path}': {err.message}"
+                return False, f"Input validation failed: {err.message}"
+            return True, None
+        except Exception:
+            # Fallback: minimal required-field validation.
+            required = self.input_schema.get("required", [])
+            for field in required:
+                if field not in kwargs:
+                    return False, f"Missing required field: {field}"
+            return True, None
 
     def to_openai_spec(self) -> Dict[str, Any]:
         """

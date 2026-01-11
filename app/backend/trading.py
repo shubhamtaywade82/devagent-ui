@@ -247,7 +247,7 @@ class TradingService:
 
     def get_historical_data(self, access_token: str, security_id: int,
                            exchange_segment: str, instrument_type: str,
-                           from_date: str, to_date: str, interval: str = "daily") -> Dict[str, Any]:
+                           from_date: str, to_date: str, interval: str) -> Dict[str, Any]:
         """
         Get historical data (daily or intraday minute data)
 
@@ -291,25 +291,12 @@ class TradingService:
             # Extract base exchange from exchange_segment
             exchange_seg_str = exchange_segment.upper()
 
-            # Handle IDX_I (indices) - need to map to actual exchange (NSE or BSE)
-            # Common indices: NIFTY 50 (13) = NSE, SENSEX (51) = BSE
+            # Handle IDX_I (indices): DhanHQ historical endpoints typically require base exchange (NSE/BSE).
+            # We do NOT hardcode security IDs to infer exchange. Instead, we try NSE first, and if it fails,
+            # the existing fallback logic below will try BSE.
             if exchange_seg_str == "IDX_I":
-                # Try to determine exchange from security_id
-                # NSE indices typically have lower IDs (e.g., 13 for NIFTY)
-                # BSE indices typically have higher IDs (e.g., 51 for SENSEX)
-                # Common NSE indices: 13 (NIFTY 50), 14 (NIFTY Bank), etc.
-                # Common BSE indices: 51 (SENSEX), etc.
-                print(f"[get_historical_data] Processing IDX_I index with security_id={security_id_int}")
-                if security_id_int in [13, 14, 15, 16, 17, 18, 19, 20]:  # Common NSE indices
-                    exchange_seg_str = "NSE"
-                    print(f"[get_historical_data] Mapped security_id {security_id_int} to NSE")
-                elif security_id_int in [51, 52, 53, 54, 55]:  # Common BSE indices
-                    exchange_seg_str = "BSE"
-                    print(f"[get_historical_data] Mapped security_id {security_id_int} to BSE")
-                else:
-                    # Default to NSE for unknown indices, but log a warning
-                    print(f"[get_historical_data] Unknown index security_id {security_id_int}, defaulting to NSE")
-                    exchange_seg_str = "NSE"
+                print(f"[get_historical_data] Processing IDX_I index with security_id={security_id_int} (trying NSE with BSE fallback)")
+                exchange_seg_str = "NSE"
             elif exchange_seg_str.startswith('NSE'):
                 # Extract "NSE" from "NSE_EQ", "NSE_FO", etc.
                 exchange_seg_str = "NSE"
@@ -363,17 +350,19 @@ class TradingService:
                     # Requires instrument (e.g., "EQUITY") not instrument_type
                     # Date format: "YYYY-MM-DD HH:MM:SS"
 
-                    interval_value = "1"  # Default to 1 minute
-                    if interval_str.isdigit():
-                        interval_int = int(interval_str)
-                        # Validate interval is one of the supported values
-                        if interval_int in [1, 5, 15, 25, 60]:
-                            interval_value = str(interval_int)
-                        else:
-                            print(f"[get_historical_data] Invalid interval {interval_int}, defaulting to 1 minute")
-                            interval_value = "1"
-                    else:
-                        print(f"[get_historical_data] Non-numeric interval '{interval_str}', defaulting to 1 minute")
+                    # Enforce strict intraday interval (no silent defaults).
+                    if not interval_str.isdigit():
+                        return {
+                            "success": False,
+                            "error": f"Invalid interval '{interval_str}'. Must be one of: 1, 5, 15, 25, 60."
+                        }
+                    interval_int = int(interval_str)
+                    if interval_int not in [1, 5, 15, 25, 60]:
+                        return {
+                            "success": False,
+                            "error": f"Invalid interval '{interval_int}'. Must be one of: 1, 5, 15, 25, 60."
+                        }
+                    interval_value = str(interval_int)
 
                     # Use original exchange_segment (e.g., "NSE_EQ", "IDX_I") for REST API
                     # Convert instrument_type to instrument
@@ -520,11 +509,17 @@ class TradingService:
                                 )
                             else:
                                 # Handle interval for fallback call - use numeric interval
-                                fallback_interval = 1  # Default to 1 minute
-                                if interval_str.isdigit():
-                                    fallback_interval = int(interval_str)
-                                    if fallback_interval not in [1, 5, 10, 15, 60]:
-                                        fallback_interval = 1
+                                if not interval_str.isdigit():
+                                    return {
+                                        "success": False,
+                                        "error": f"Invalid interval '{interval_str}'. Must be one of: 1, 5, 15, 25, 60."
+                                    }
+                                fallback_interval = int(interval_str)
+                                if fallback_interval not in [1, 5, 15, 25, 60]:
+                                    return {
+                                        "success": False,
+                                        "error": f"Invalid interval '{fallback_interval}'. Must be one of: 1, 5, 15, 25, 60."
+                                    }
 
                                 data = dhan.intraday_minute_data(
                                     security_id=security_id_str,
