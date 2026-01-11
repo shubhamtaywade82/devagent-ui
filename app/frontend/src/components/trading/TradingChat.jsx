@@ -340,10 +340,25 @@ function TradingChat({ accessToken }) {
   };
 
   const quickQuestions = [
+    // Portfolio & Positions
     "What are my current positions?",
     "Show me my portfolio P&L",
     "What's the current price of NIFTY?",
     "Analyze HDFC Bank stock",
+    // Options Buying
+    "Show me NIFTY option chain for current expiry",
+    "What's the premium for NIFTY 26000 CE?",
+    "Analyze call options for RELIANCE",
+    "Find best strike price for NIFTY put options",
+    "What's the open interest for BANKNIFTY options?",
+    "Compare premiums for different NIFTY call strikes",
+    // Swing Trading
+    "What's the trend of NIFTY over last 30 days?",
+    "Show me support and resistance levels for HDFC Bank",
+    "Analyze RELIANCE for swing trading entry",
+    "What's the 20-day moving average for NIFTY?",
+    "Find swing trading opportunities in IT stocks",
+    "Analyze volume patterns for TCS",
   ];
 
   return (
@@ -378,18 +393,53 @@ function TradingChat({ accessToken }) {
             </p>
 
             {/* Quick Questions */}
-            <div className="mt-6 space-y-2">
-              <p className="text-xs text-zinc-600 mb-2">Try asking:</p>
-              {quickQuestions.map((q, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleQuickQuestion(q)}
-                  className="block w-full text-left px-3 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-zinc-300 transition-colors"
-                >
-                  <MessageSquare className="w-3 h-3 inline mr-2" />
-                  {q}
-                </button>
-              ))}
+            <div className="mt-6 space-y-4">
+              <p className="text-xs text-zinc-600 mb-3 font-medium">Try asking:</p>
+
+              {/* Portfolio & Market Data */}
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium">📊 Portfolio & Market Data</p>
+                {quickQuestions.slice(0, 4).map((q, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleQuickQuestion(q)}
+                    className="block w-full text-left px-3 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-zinc-300 transition-colors mb-1"
+                  >
+                    <MessageSquare className="w-3 h-3 inline mr-2" />
+                    {q}
+                  </button>
+                ))}
+              </div>
+
+              {/* Options Buying */}
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium">📈 Options Buying</p>
+                {quickQuestions.slice(4, 10).map((q, idx) => (
+                  <button
+                    key={idx + 4}
+                    onClick={() => handleQuickQuestion(q)}
+                    className="block w-full text-left px-3 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-zinc-300 transition-colors mb-1"
+                  >
+                    <MessageSquare className="w-3 h-3 inline mr-2" />
+                    {q}
+                  </button>
+                ))}
+              </div>
+
+              {/* Swing Trading */}
+              <div>
+                <p className="text-xs text-zinc-500 mb-2 font-medium">🔄 Swing Trading</p>
+                {quickQuestions.slice(10).map((q, idx) => (
+                  <button
+                    key={idx + 10}
+                    onClick={() => handleQuickQuestion(q)}
+                    className="block w-full text-left px-3 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-zinc-300 transition-colors mb-1"
+                  >
+                    <MessageSquare className="w-3 h-3 inline mr-2" />
+                    {q}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}

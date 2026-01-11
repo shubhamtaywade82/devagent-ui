@@ -23,7 +23,7 @@ class FindInstrumentTool(Tool):
     """Resolve symbol to DhanHQ security_id and exchange_segment"""
 
     name = "find_instrument"
-    description = "Search for instruments/securities by symbol name, trading symbol, or underlying symbol. Returns security ID, exchange segment, and instrument details. ALWAYS use this first when user asks about a stock, index, or instrument by name (e.g., 'NIFTY', 'HDFC Bank', 'RELIANCE'). Then use the returned security_id and exchange_segment for other operations."
+    description = "Search for instruments/securities by symbol name, trading symbol, or underlying symbol. Returns security ID, exchange segment, and instrument details. MANDATORY: Use this AUTOMATICALLY when user mentions any stock, index, or instrument by name (e.g., 'NIFTY', 'HDFC Bank', 'RELIANCE'). This is an internal resolution step - NEVER ask the user for security_id or exchange_segment. Always call this tool first, then use the returned security_id and exchange_segment for subsequent operations like get_quote."
 
     input_schema = {
         "type": "object",

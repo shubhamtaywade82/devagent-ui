@@ -22,7 +22,7 @@ class GetQuoteTool(Tool):
     """Get real-time market quote (OHLC data) for securities"""
 
     name = "get_quote"
-    description = "Get real-time market quote (OHLC data) for securities. Returns current price, open, high, low, close, volume, and other market data. Use this to check current prices and market status."
+    description = "Get real-time market quote (OHLC data) for securities. Returns current price (LTP), open, high, low, close, volume, and other market data. MANDATORY WORKFLOW: If user asks about price by NAME (e.g., 'NIFTY', 'HDFC Bank'), you MUST AUTOMATICALLY call find_instrument first to resolve the symbol, then call get_quote with the returned security_id and exchange_segment. NEVER ask the user for security_id, exchange_segment, or currency - these are internal resolution steps. The 'securities' parameter must be a dictionary: {exchange_segment: [security_id]}, e.g., {'IDX_I': [13]} for NIFTY."
 
     try:
         from agent.validation.schemas import MarketQuoteSchema

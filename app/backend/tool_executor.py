@@ -1068,12 +1068,10 @@ async def analyze_market_composite(
                             "days_analyzed": days
                         }
 
-                        # Create human-readable trend summary
-                        trend_summary = f"Trend Analysis ({days} days):\n"
-                        trend_summary += f"- Starting Price: ₹{trend['first_price']}\n"
-                        trend_summary += f"- Current Price: ₹{current_price or trend['last_price']}\n"
-                        trend_summary += f"- Change: ₹{trend['change']} ({trend['change_percent']:+.2f}%)\n"
-                        trend_summary += f"- Direction: {'📈 Upward' if direction == 'up' else '📉 Downward' if direction == 'down' else '➡️ Neutral'}"
+                        # Create human-readable trend summary (natural language format)
+                        direction_text = "upward" if direction == 'up' else "downward" if direction == 'down' else "neutral"
+                        trend_summary = f"Showing a {direction_text} trend over the past {days} days with a percentage change of {trend['change_percent']:+.2f}%.\n"
+                        trend_summary += f"Starting price: ₹{trend['first_price']:.2f} → Current price: ₹{current_price or trend['last_price']:.2f} (Change: ₹{trend['change']:+.2f})"
                     else:
                         print(f"[analyze_market] Trend calculation failed - first_close: {first_close}, last_close: {last_close}")
                         # If we have historical data but can't calculate trend, at least show we have data

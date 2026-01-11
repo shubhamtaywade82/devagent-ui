@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 import httpx
 import json
+import re
 import asyncio
 import threading
 from datetime import datetime, timedelta
@@ -24,6 +25,40 @@ from models import Project, File, ChatMessage
 from trading import trading_service
 from tools import DHANHQ_TOOLS
 from tool_executor import execute_tool, get_access_token
+
+
+def needs_market_data(user_message: str) -> bool:
+    """
+    Detect if user query requires market data fetching.
+    Returns True if query is about prices, quotes, or market data.
+    """
+    if not user_message:
+        return False
+
+    message_lower = user_message.lower()
+    keywords = [
+        "price", "ltp", "current", "trading at", "quote", "market data",
+        "what is", "what's", "show me", "get", "fetch", "current price",
+        "how much", "value", "worth"
+    ]
+    return any(keyword in message_lower for keyword in keywords)
+
+
+def needs_trend_analysis(user_message: str) -> bool:
+    """
+    Detect if user query requires trend analysis.
+    Returns True if query is about trends, analysis, performance, or movement.
+    """
+    if not user_message:
+        return False
+
+    message_lower = user_message.lower()
+    keywords = [
+        "trend", "analysis", "performance", "movement", "direction",
+        "how is", "how are", "doing", "change", "changed", "up", "down",
+        "rising", "falling", "gained", "lost", "percentage"
+    ]
+    return any(keyword in message_lower for keyword in keywords)
 
 
 def format_market_quote_result(data, instrument_name=None):
@@ -938,19 +973,23 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                 user_messages = [msg.get("content", "").lower() for msg in messages if msg.get("role") == "user"]
                 combined_user_content = " ".join(user_messages)
 
-                trading_keywords = [
-                    "price", "quote", "position", "positions", "holding", "holdings",
-                    "p&l", "pnl", "profit", "loss", "portfolio", "balance", "fund",
-                    "funds", "margin", "order", "orders", "trade", "trades",
-                    "nifty", "hdfc", "reliance", "tcs", "infy", "sensex", "bank nifty",
-                    "current", "what are", "show me", "get my", "fetch", "search"
-                ]
-
-                if access_token and any(keyword in combined_user_content for keyword in trading_keywords):
-                    # Force tool usage for trading-related queries
+                # Force tool usage for market data and trend queries - agent must fetch data, not ask questions
+                if access_token and (needs_market_data(combined_user_content) or needs_trend_analysis(combined_user_content)):
+                    # Force tool usage - agent MUST call tools for market data and trend queries
                     payload["tool_choice"] = "required"
+                elif access_token:
+                    # For other trading queries, prefer tool usage but allow model to decide
+                    trading_keywords = [
+                        "position", "positions", "holding", "holdings",
+                        "p&l", "pnl", "profit", "loss", "portfolio", "balance", "fund",
+                        "funds", "margin", "order", "orders", "trade", "trades"
+                    ]
+                    if any(keyword in combined_user_content for keyword in trading_keywords):
+                        payload["tool_choice"] = "required"
+                    else:
+                        payload["tool_choice"] = "auto"
                 else:
-                    payload["tool_choice"] = "auto"  # Let model decide when to use tools
+                    payload["tool_choice"] = "auto"
 
             response = await client.post(url, json=payload)
             if response.status_code != 200:
@@ -1009,16 +1048,114 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         # Execute the tool
                         result = await execute_tool(function_name, function_args, access_token)
 
-                        # If the tool was blocked by the guard layer, ask the user instead of continuing.
+                        # If the tool was blocked by the guard layer, try automatic tool chaining for price queries
                         if isinstance(result, dict) and result.get("action") in ["ASK_USER", "ASK_USER_INVALID"]:
-                            tool_call_meta["status"] = "blocked"
-                            tool_call_meta["result"] = result.get("error") or "Missing/invalid parameters"
-                            tool_calls_metadata.append(tool_call_meta)
-                            return {
-                                "response": result.get("error") or "I need more information to proceed.",
-                                "tool_calls": tool_calls_metadata,
-                                "reasoning": "Blocked unsafe tool call; requested missing/invalid information.",
-                            }
+                            # Special handling: if get_quote/get_market_quote is called without securities,
+                            # and the user query mentions an instrument name, automatically call find_instrument first
+                            if function_name in ["get_quote", "get_market_quote"]:
+                                missing_fields = result.get("missing_fields", [])
+                                if "securities" in missing_fields or not function_args.get("securities"):
+                                    # Extract user query from messages to find instrument name
+                                    user_query = ""
+                                    for msg in messages:
+                                        if msg.get("role") == "user":
+                                            user_query = msg.get("content", "").lower()
+                                            break
+
+                                    # Common instrument names/keywords
+                                    instrument_keywords = ["nifty", "sensex", "bank nifty", "hdfc", "reliance", "tcs", "infy", "wipro", "icici"]
+                                    found_instrument = None
+                                    for keyword in instrument_keywords:
+                                        if keyword in user_query:
+                                            found_instrument = keyword
+                                            break
+
+                                    # Also try to extract instrument name from the query more intelligently
+                                    # Look for patterns like "price of X", "X price", "current price of X"
+                                    if not found_instrument:
+                                        price_patterns = [
+                                            r"price of (\w+)",
+                                            r"(\w+) price",
+                                            r"current price of (\w+)",
+                                            r"what.*price.*(\w+)",
+                                            r"(\w+).*price"
+                                        ]
+                                        for pattern in price_patterns:
+                                            match = re.search(pattern, user_query, re.IGNORECASE)
+                                            if match:
+                                                found_instrument = match.group(1).strip()
+                                                break
+
+                                    if found_instrument:
+                                        print(f"[auto_chain] Detected instrument '{found_instrument}' in query, automatically calling find_instrument first")
+                                        # Determine instrument type based on keyword
+                                        instrument_type = "INDEX" if found_instrument.lower() in ["nifty", "sensex", "bank nifty"] else None
+
+                                        # Call find_instrument automatically
+                                        search_result = await execute_tool(
+                                            "find_instrument",
+                                            {"query": found_instrument, "instrument_type": instrument_type} if instrument_type else {"query": found_instrument},
+                                            access_token
+                                        )
+
+                                        if search_result.get("success") and search_result.get("instruments"):
+                                            instruments = search_result.get("instruments", [])
+                                            if instruments:
+                                                # Use the first matching instrument
+                                                inst = instruments[0]
+                                                security_id = inst.get("security_id")
+                                                exchange_segment = inst.get("exchange_segment")
+
+                                                if security_id and exchange_segment:
+                                                    print(f"[auto_chain] Found instrument: security_id={security_id}, exchange_segment={exchange_segment}")
+                                                    # Retry get_quote with the found security_id
+                                                    function_args["securities"] = {exchange_segment: [security_id]}
+                                                    # Update tool call metadata
+                                                    tool_call_meta["tool"] = f"find_instrument (auto) → {function_name}"
+                                                    tool_calls_metadata.append({
+                                                        "tool": "find_instrument",
+                                                        "args": {"query": found_instrument, "instrument_type": instrument_type} if instrument_type else {"query": found_instrument},
+                                                        "status": "success",
+                                                        "result": f"Found: {inst.get('display_name', inst.get('symbol_name', 'N/A'))}",
+                                                        "timestamp": datetime.now().isoformat()
+                                                    })
+                                                    # Re-execute get_quote with the found securities
+                                                    result = await execute_tool(function_name, function_args, access_token)
+                                                    # Continue with the result (don't return early)
+                                                else:
+                                                    print(f"[auto_chain] Found instrument but missing security_id or exchange_segment")
+                                            else:
+                                                print(f"[auto_chain] find_instrument returned no instruments")
+                                        else:
+                                            print(f"[auto_chain] find_instrument failed: {search_result.get('error', 'Unknown error')}")
+
+                            # If still blocked after auto-chaining attempt, provide helpful error without exposing internal mechanics
+                            if isinstance(result, dict) and result.get("action") in ["ASK_USER", "ASK_USER_INVALID"]:
+                                tool_call_meta["status"] = "blocked"
+                                tool_call_meta["result"] = result.get("error") or "Missing/invalid parameters"
+                                tool_calls_metadata.append(tool_call_meta)
+
+                                # Never ask user for security_id, exchange_segment, or currency
+                                # Instead, provide a helpful error message
+                                error_msg = result.get("error", "")
+                                if "securities" in error_msg.lower() or "security_id" in error_msg.lower():
+                                    # This means we couldn't resolve the instrument - provide user-friendly message
+                                    user_query = ""
+                                    for msg in messages:
+                                        if msg.get("role") == "user":
+                                            user_query = msg.get("content", "")
+                                            break
+                                    return {
+                                        "response": f"I couldn't find market data for your query. Please check the symbol name and try again. If you mentioned a specific stock or index, please ensure the name is spelled correctly.",
+                                        "tool_calls": tool_calls_metadata,
+                                        "reasoning": "Could not resolve instrument automatically.",
+                                    }
+                                else:
+                                    return {
+                                        "response": "I encountered an issue fetching the market data. Please try again or rephrase your query.",
+                                        "tool_calls": tool_calls_metadata,
+                                        "reasoning": "Tool execution blocked.",
+                                    }
 
                         # Update tool call metadata with result
                         tool_call_meta["status"] = "success" if result.get("success") else "error"
@@ -1161,6 +1298,95 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
 
                                 # Execute the tool
                                 result = await execute_tool(function_name, function_args, access_token)
+
+                                # If the tool was blocked, try automatic tool chaining for price queries
+                                if isinstance(result, dict) and result.get("action") in ["ASK_USER", "ASK_USER_INVALID"]:
+                                    # Special handling: if get_quote/get_market_quote is called without securities,
+                                    # and the user query mentions an instrument name, automatically call find_instrument first
+                                    if function_name in ["get_quote", "get_market_quote"]:
+                                        missing_fields = result.get("missing_fields", [])
+                                        if "securities" in missing_fields or not function_args.get("securities"):
+                                            # Extract user query from messages to find instrument name
+                                            user_query = ""
+                                            for msg in messages:
+                                                if msg.get("role") == "user":
+                                                    user_query = msg.get("content", "").lower()
+                                                    break
+
+                                            # Common instrument names/keywords
+                                            instrument_keywords = ["nifty", "sensex", "bank nifty", "hdfc", "reliance", "tcs", "infy", "wipro", "icici"]
+                                            found_instrument = None
+                                            for keyword in instrument_keywords:
+                                                if keyword in user_query:
+                                                    found_instrument = keyword
+                                                    break
+
+                                            # Also try to extract instrument name from the query more intelligently
+                                            if not found_instrument:
+                                                price_patterns = [
+                                                    r"price of (\w+)",
+                                                    r"(\w+) price",
+                                                    r"current price of (\w+)",
+                                                    r"what.*price.*(\w+)",
+                                                    r"(\w+).*price"
+                                                ]
+                                                for pattern in price_patterns:
+                                                    match = re.search(pattern, user_query, re.IGNORECASE)
+                                                    if match:
+                                                        found_instrument = match.group(1).strip()
+                                                        break
+
+                                            if found_instrument:
+                                                print(f"[auto_chain] Detected instrument '{found_instrument}' in query, automatically calling find_instrument first")
+                                                # Determine instrument type based on keyword
+                                                instrument_type = "INDEX" if found_instrument.lower() in ["nifty", "sensex", "bank nifty"] else None
+
+                                                # Call find_instrument automatically
+                                                search_result = await execute_tool(
+                                                    "find_instrument",
+                                                    {"query": found_instrument, "instrument_type": instrument_type} if instrument_type else {"query": found_instrument},
+                                                    access_token
+                                                )
+
+                                                if search_result.get("success") and search_result.get("instruments"):
+                                                    instruments = search_result.get("instruments", [])
+                                                    if instruments:
+                                                        # Use the first matching instrument
+                                                        inst = instruments[0]
+                                                        security_id = inst.get("security_id")
+                                                        exchange_segment = inst.get("exchange_segment")
+
+                                                        if security_id and exchange_segment:
+                                                            print(f"[auto_chain] Found instrument: security_id={security_id}, exchange_segment={exchange_segment}")
+                                                            # Retry get_quote with the found security_id
+                                                            function_args["securities"] = {exchange_segment: [security_id]}
+                                                            # Track this for UI
+                                                            tool_calls_metadata.append({
+                                                                "tool": "find_instrument",
+                                                                "args": {"query": found_instrument, "instrument_type": instrument_type} if instrument_type else {"query": found_instrument},
+                                                                "status": "success",
+                                                                "result": f"Found: {inst.get('display_name', inst.get('symbol_name', 'N/A'))}",
+                                                                "timestamp": datetime.now().isoformat()
+                                                            })
+                                                            # Re-execute get_quote with the found securities
+                                                            result = await execute_tool(function_name, function_args, access_token)
+
+                                    # If still blocked after auto-chaining, provide helpful error without exposing internal mechanics
+                                    if isinstance(result, dict) and result.get("action") in ["ASK_USER", "ASK_USER_INVALID"]:
+                                        error_msg = result.get("error", "")
+                                        if "securities" in error_msg.lower() or "security_id" in error_msg.lower():
+                                            # Couldn't resolve instrument - provide user-friendly message
+                                            return {
+                                                "response": "I couldn't find market data for your query. Please check the symbol name and try again.",
+                                                "tool_calls": tool_calls_metadata,
+                                                "reasoning": "Could not resolve instrument automatically.",
+                                            }
+                                        else:
+                                            return {
+                                                "response": "I encountered an issue fetching the market data. Please try again.",
+                                                "tool_calls": tool_calls_metadata,
+                                                "reasoning": "Tool execution blocked.",
+                                            }
 
                                 # Format result
                                 if isinstance(result, dict):
@@ -1530,68 +1756,62 @@ Provide a helpful, concise response with code examples when relevant."""
                     if is_trading_request:
                         messages_list.append({
                             "role": "system",
-                            "content": """You are a trading assistant with access to real-time market data via DhanHQ APIs through function calling tools.
+                            "content": """You are a trading data assistant with access to real-time market data via DhanHQ APIs.
 
-CRITICAL WORKFLOW:
-1. When users ask about stocks, indices, or instruments by NAME (e.g., "NIFTY", "HDFC Bank", "RELIANCE"):
-   - FIRST: Call find_instrument with the name to find security_id and exchange_segment
-   - THEN: Use the returned security_id and exchange_segment for other operations (get_quote, get_intraday_ohlcv, get_daily_ohlcv, analyze_market, etc.)
+NON-NEGOTIABLE RULES:
+1. You NEVER ask the user for security_id, exchange_segment, currency, or any internal identifiers.
+2. You ALWAYS resolve instruments internally using find_instrument tool - this is an automatic internal step.
+3. If a user asks for current price, you MUST fetch live data immediately - no questions, no hesitation.
+4. You MUST NOT ask clarifying questions if the intent is clear (e.g., "price of NIFTY" is clear).
+5. You MUST NOT mention tools, IDs, exchange segments, or internal steps in your final response to the user.
+6. If data is unavailable, state that clearly without exposing internal mechanics.
 
-2. When users ask about PRICES or CURRENT MARKET DATA:
-   - Call find_instrument first to get security_id and exchange_segment
-   - Then call get_quote with those values
-   - Present the actual price data
+COMMON INDICES REFERENCE (Use these directly - no need to search):
+- NIFTY: security_id=13, exchange_segment="IDX_I", instrument_type="INDEX"
+- SENSEX: security_id=51, exchange_segment="IDX_I", instrument_type="INDEX"
 
-3. When users ask about TRENDS, ANALYSIS, or HISTORICAL PERFORMANCE:
-   - Call find_instrument first to get security_id and exchange_segment
-   - Then call analyze_market OR daily/intraday OHLCV tools to get trend information
-   - analyze_market provides comprehensive analysis (current price + historical trend) using daily data
-   - get_daily_ohlcv / get_intraday_ohlcv provide raw OHLCV data for custom analysis
-   - Use YYYY-MM-DD for from_date/to_date (no time components)
-   - Intraday data returns candle objects with timestamp, time, date, OHLC, volume, and open_interest (for F&O)
-   - For indices (NIFTY, SENSEX), use exchange_segment="IDX_I" and instrument_type="INDEX"
+For these common indices, you can use the security_id and exchange_segment directly without calling find_instrument first. This makes responses faster and more reliable.
 
-4. When users ask about positions, holdings, or portfolio:
-   - Use the available tools to fetch real data
-   - DO NOT generate Python code or pseudo-code - use the actual function calling tools
-   - If required parameters are missing for a tool, ASK the user for the missing fields (do not guess)
+INSTRUMENT RESOLUTION POLICY:
+- For well-known indices (NIFTY, SENSEX), use the reference above directly.
+- For other symbols (BANKNIFTY, RELIANCE, HDFC, TCS, etc.), automatically call find_instrument.
+- For all indices: exchange_segment="IDX_I", instrument_type="INDEX"
+- Never ask the user to confirm exchange, segment, or currency - these are internal details.
 
-GLOBAL RULES (NON-NEGOTIABLE):
-- Never guess or invent: security_id, exchange_segment, instrument_type, dates, intervals, strikes, expiries
-- Respect tool JSON schemas exactly (required fields + enums)
-- If a tool call is blocked due to missing/invalid parameters, respond with a clarification question
+CANONICAL TOOL CHAINS:
 
-5. Workflow examples:
-   User: "What's the price of NIFTY?"
-   Step 1: Call find_instrument(query="NIFTY", instrument_type="INDEX")
-   Step 2: Extract security_id (should be 13 for NIFTY 50) and exchange_segment (should be "IDX_I") from the search results
-   Step 3: Call get_quote with securities={"IDX_I": [13]} (using the actual security_id from step 2)
-   Step 4: Format and provide the actual price from the response
+For "current price" queries:
+1. Call find_instrument(query="[symbol]", instrument_type="INDEX" if index, else None)
+2. Extract security_id and exchange_segment from results
+3. Call get_quote(securities={exchange_segment: [security_id]})
+4. Respond with: "The current price of [symbol] is ₹[price]." (or similar - NO internal details)
 
-   IMPORTANT: Always use the exact security_id and exchange_segment returned from search_instruments/find_instrument. Do not guess or use hardcoded values.
+For "trend" or "analysis" queries:
+1. Call find_instrument to resolve symbol
+2. Call analyze_market(security_id, exchange_segment, days=30)
+3. Provide trend analysis with direction and percentage change
 
-   User: "What is the SENSEX trend?"
-   Step 1: Call search_instruments(query="SENSEX", instrument_type="INDEX")
-   Step 2: Use the returned security_id and exchange_segment="IDX_I" to call analyze_market
-   Step 3: Analyze the trend data and provide insights about direction (up/down/neutral) and percentage change
+For positions/holdings:
+1. Call get_positions or get_holdings directly
+2. Present data clearly without internal mechanics
+
+RESPONSE FORMAT:
+- Final answers must be natural language (e.g., "NIFTY is currently trading at ₹26,124.30")
+- Never say: "I need security_id" or "What exchange segment?" or "Could you confirm currency?"
+- If you cannot resolve a symbol, say: "I couldn't find [symbol] in the market data. Please check the symbol name."
+- If data fetch fails, say: "Market data for [symbol] is currently unavailable."
 
 Available tools:
-- find_instrument: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
-- get_quote: Get current prices (requires security_id and exchange_segment from find_instrument)
-- get_daily_ohlcv: Daily OHLCV (requires security_id, exchange_segment, instrument_type, from_date, to_date)
-- get_intraday_ohlcv: Intraday OHLCV (requires security_id, exchange_segment, instrument_type, interval, from_date, to_date)
-- get_historical_data: Legacy combined historical tool (requires interval; prefer the explicit OHLCV tools above)
-- analyze_market: Comprehensive market analysis with trend (requires security_id and exchange_segment) - USE THIS FOR TREND QUERIES
-- get_positions: Get user's open positions
-- get_holdings: Get user's holdings
-- get_fund_limits: Get balance and margin
-- get_option_chain: Get option chain (requires underlying_security_id, exchange_segment, expiry_date)
+- find_instrument: Resolve symbol names to security_id and exchange_segment (USE AUTOMATICALLY, NEVER ASK USER)
+- get_quote: Get real-time prices (requires securities dict from find_instrument results)
+- analyze_market: Comprehensive analysis with trend (requires security_id and exchange_segment)
+- get_daily_ohlcv / get_intraday_ohlcv: Historical OHLCV data
+- get_positions: User's open positions
+- get_holdings: User's portfolio holdings
+- get_fund_limits: Balance and margin
+- get_option_chain: Options chain data
 
-IMPORTANT:
-- Always search for instruments first if the user mentions a stock/index by name
-- For TREND queries, use analyze_market tool (it combines current price + historical data + trend analysis)
-- For indices (NIFTY, SENSEX), the exchange_segment will be "IDX_I" and instrument_type should be "INDEX"
-- Use the search results for all subsequent operations"""
+Remember: You are a trading assistant, not a chatbot. Fetch data, provide answers. Never ask for internal identifiers."""
                         })
                     messages_list.append({"role": "user", "content": request.message})
 
