@@ -1,14 +1,39 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Search, TrendingUp } from "lucide-react";
 import api from "../../services/api";
 import RealTimeMarketFeed from "./RealTimeMarketFeed";
 import InstrumentSearch from "./InstrumentSearch";
 
-function MarketData({ accessToken }) {
+function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared }) {
   const [selectedInstrument, setSelectedInstrument] = useState(null);
   const [quoteData, setQuoteData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Handle initial instrument from header search
+  useEffect(() => {
+    if (initialInstrument) {
+      // Validate instrument has required fields
+      if (initialInstrument.securityId && initialInstrument.securityId.trim() !== "") {
+        // Only update if it's a different instrument
+        const currentId = selectedInstrument?.securityId;
+        const newId = initialInstrument.securityId;
+        if (currentId !== newId) {
+          setSelectedInstrument(initialInstrument);
+          fetchMarketQuote(initialInstrument);
+        }
+      } else {
+        setError(
+          "Selected instrument has invalid Security ID. Please select another instrument."
+        );
+      }
+    } else if (initialInstrument === null && selectedInstrument) {
+      // Clear selection if initialInstrument is explicitly set to null
+      setSelectedInstrument(null);
+      setQuoteData(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInstrument]);
 
   // Helper function to get exchange name from exchange segment or instrument data
   const getExchangeName = (exchangeSegment, instrument = null) => {
@@ -52,6 +77,9 @@ function MarketData({ accessToken }) {
     if (!instrument) {
       setSelectedInstrument(null);
       setQuoteData(null);
+      if (onInstrumentCleared) {
+        onInstrumentCleared();
+      }
       return;
     }
 
@@ -62,6 +90,9 @@ function MarketData({ accessToken }) {
       );
       setSelectedInstrument(null);
       setQuoteData(null);
+      if (onInstrumentCleared) {
+        onInstrumentCleared();
+      }
       return;
     }
 

@@ -10,6 +10,7 @@ import {
   MessageSquare,
   X,
   ExternalLink,
+  Search,
 } from "lucide-react";
 import TradingDashboard from "../components/trading/TradingDashboard";
 import OrderPlacement from "../components/trading/OrderPlacement";
@@ -19,6 +20,7 @@ import TradingAuth from "../components/trading/TradingAuth";
 import LiveOrderUpdates from "../components/trading/LiveOrderUpdates";
 import TradingChat from "../components/trading/TradingChat";
 import IndexIndicators from "../components/trading/IndexIndicators";
+import InstrumentSearch from "../components/trading/InstrumentSearch";
 import api from "../services/api";
 
 function TradingPage() {
@@ -28,6 +30,7 @@ function TradingPage() {
   const [accessToken, setAccessToken] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [showChat, setShowChat] = useState(false);
+  const [headerSelectedInstrument, setHeaderSelectedInstrument] = useState(null);
 
   useEffect(() => {
     // Check if access token exists in localStorage
@@ -76,21 +79,40 @@ function TradingPage() {
     <div className="h-screen bg-zinc-950 flex flex-col overflow-hidden">
       {/* Header */}
       <div className="h-16 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-sm flex items-center justify-between px-6 z-10">
-        <div className="flex items-center gap-6 flex-1">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4 flex-1 min-w-0">
+          <div className="flex items-center gap-3 flex-shrink-0">
             <TrendingUp className="w-6 h-6 text-green-500" />
             <h1 className="text-lg font-semibold font-manrope text-white">
               Trading Dashboard
             </h1>
           </div>
           {userProfile && (
-            <span className="text-sm text-zinc-400 hidden md:block">
+            <span className="text-sm text-zinc-400 hidden lg:block flex-shrink-0">
               {userProfile.name || userProfile.clientId}
             </span>
           )}
+          {/* Header Search - Compact */}
+          {isAuthenticated && (
+            <div className="flex-1 max-w-md min-w-0 mx-2">
+              <div className="relative">
+                <InstrumentSearch
+                  onSelect={(instrument) => {
+                    if (instrument) {
+                      setHeaderSelectedInstrument(instrument);
+                      setActiveTab("market");
+                    } else {
+                      setHeaderSelectedInstrument(null);
+                    }
+                  }}
+                  placeholder="Search instrument..."
+                  accessToken={accessToken}
+                />
+              </div>
+            </div>
+          )}
           {/* Market Indices - Compact */}
           {isAuthenticated && (
-            <div className="flex-1 flex justify-center">
+            <div className="flex-shrink-0 hidden xl:flex">
               <IndexIndicators accessToken={accessToken} />
             </div>
           )}
@@ -194,7 +216,13 @@ function TradingPage() {
           {activeTab === "portfolio" && (
             <PortfolioView accessToken={accessToken} />
           )}
-          {activeTab === "market" && <MarketData accessToken={accessToken} />}
+          {activeTab === "market" && (
+            <MarketData
+              accessToken={accessToken}
+              initialInstrument={headerSelectedInstrument}
+              onInstrumentCleared={() => setHeaderSelectedInstrument(null)}
+            />
+          )}
         </div>
 
         {/* Sidebars */}
