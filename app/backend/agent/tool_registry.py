@@ -12,6 +12,9 @@ try:
     from agent.tools.get_quote import GetQuoteTool
     from agent.tools.get_historical_data import GetHistoricalDataTool
     from agent.tools.analyze_market import AnalyzeMarketTool
+    from agent.tools.get_intraday_ohlcv import GetIntradayOHLCVTool
+    from agent.tools.get_daily_ohlcv import GetDailyOHLCVTool
+    from agent.tools.get_option_chain import GetOptionChainTool
 except ImportError:
     # Fallback for different import paths
     from app.agent.tools.base import Tool
@@ -19,6 +22,9 @@ except ImportError:
     from app.agent.tools.get_quote import GetQuoteTool
     from app.agent.tools.get_historical_data import GetHistoricalDataTool
     from app.agent.tools.analyze_market import AnalyzeMarketTool
+    from app.agent.tools.get_intraday_ohlcv import GetIntradayOHLCVTool
+    from app.agent.tools.get_daily_ohlcv import GetDailyOHLCVTool
+    from app.agent.tools.get_option_chain import GetOptionChainTool
 
 
 # Registry of all available tools
@@ -53,7 +59,10 @@ def get_tool_specs() -> list[Dict[str, Any]]:
 # Tool name aliases for backward compatibility
 TOOL_ALIASES = {
     "search_instruments": "find_instrument",
-    "get_market_quote": "get_quote"
+    "get_market_quote": "get_quote",
+    # Keep legacy historical name; prefer explicit tools
+    "get_intraday_ohlcv": "get_intraday_ohlcv",
+    "get_daily_ohlcv": "get_daily_ohlcv",
 }
 
 
@@ -78,6 +87,9 @@ def initialize_registry():
     register_tool(FindInstrumentTool())
     register_tool(GetQuoteTool())
     register_tool(GetHistoricalDataTool())
+    register_tool(GetIntradayOHLCVTool())
+    register_tool(GetDailyOHLCVTool())
+    register_tool(GetOptionChainTool())
     register_tool(AnalyzeMarketTool())
 
 

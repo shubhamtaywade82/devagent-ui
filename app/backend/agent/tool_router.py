@@ -11,6 +11,12 @@ try:
     from agent.tool_registry import get_tool
 except ImportError:
     from app.agent.tool_registry import get_tool
+try:
+    from agent.validation.contracts import get_schema_for_tool
+    from agent.validation.guard import guard_tool_call
+except ImportError:
+    from app.agent.validation.contracts import get_schema_for_tool
+    from app.agent.validation.guard import guard_tool_call
 
 
 async def execute_tool(
@@ -63,6 +69,24 @@ async def execute_tool(
                 "success": False,
                 "error": f"Unknown tool: {tool_name}. Failed to get available tools: {str(e)}"
             }
+
+    # Guard (schema + missing-info detection) BEFORE tool.validate_input/tool.run
+    try:
+        schema = get_schema_for_tool(actual_tool_name, tool_args or {})
+        if schema is not None:
+            check = guard_tool_call(intent=actual_tool_name, schema=schema, payload=tool_args or {})
+            if check.get("action") != "PROCEED":
+                # Standardized "ask user" contract recognized by the agent loop.
+                return {
+                    "success": False,
+                    "action": check.get("action"),
+                    "intent": actual_tool_name,
+                    "missing_fields": check.get("missing_fields", []),
+                    "invalid_fields": check.get("invalid_fields", []),
+                    "error": check.get("message", "Missing or invalid parameters."),
+                }
+    except Exception as e:
+        return {"success": False, "error": f"Guard validation error: {str(e)}"}
 
     # Validate input
     try:

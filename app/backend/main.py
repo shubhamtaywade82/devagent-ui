@@ -862,6 +862,17 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         # Execute the tool
                         result = await execute_tool(function_name, function_args, access_token)
 
+                        # If the tool was blocked by the guard layer, ask the user instead of continuing.
+                        if isinstance(result, dict) and result.get("action") in ["ASK_USER", "ASK_USER_INVALID"]:
+                            tool_call_meta["status"] = "blocked"
+                            tool_call_meta["result"] = result.get("error") or "Missing/invalid parameters"
+                            tool_calls_metadata.append(tool_call_meta)
+                            return {
+                                "response": result.get("error") or "I need more information to proceed.",
+                                "tool_calls": tool_calls_metadata,
+                                "reasoning": "Blocked unsafe tool call; requested missing/invalid information.",
+                            }
+
                         # Update tool call metadata with result
                         tool_call_meta["status"] = "success" if result.get("success") else "error"
                         tool_call_meta["result"] = result.get("error") if not result.get("success") else "Success"
@@ -1007,145 +1018,7 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                     trend_keywords = ["trend", "analysis", "performance", "movement", "direction", "how is", "how are"]
                     if any(keyword in user_message for keyword in trend_keywords) and "tool_calls" not in message:
                         print("Detected trend/analysis query but no tool call - will search and analyze")
-                        # This will be handled by the fallback code below that searches for instruments
-
-                    # Try to extract get_market_quote call from code
-                    match = re.search(r'get_market_quote\s*\(\s*({[^}]+})\s*\)', content, re.IGNORECASE)
-                    if match:
-                        try:
-                            # Extract and execute
-                            args_str = match.group(1).replace("'", '"')
-                            args = json.loads(args_str)
-                            result = await execute_tool("get_market_quote", {"securities": args}, access_token)
-                            if result.get("success"):
-                                formatted = format_market_quote_result(result.get("data", {}))
-                                return {"response": f"I've fetched the current market data:\n\n{formatted}\n\nLet me know if you need any analysis of this data."}
-                        except Exception as e:
-                            print(f"Fallback execution failed: {e}")
-
-                    # Fallback: If user asked about a stock/index by name and no tool was called,
-                    # automatically search for it first, then fetch the quote
-                    user_message = messages[-1].get("content", "").lower() if messages else ""
-                    if any(keyword in user_message for keyword in ["nifty", "hdfc", "reliance", "tcs", "infy", "sensex", "bank nifty"]):
-                        # Extract the instrument name
-                        instrument_name = None
-                        if "nifty" in user_message:
-                            instrument_name = "NIFTY"
-                            instrument_type = "INDEX"
-                        elif "sensex" in user_message:
-                            instrument_name = "SENSEX"
-                            instrument_type = "INDEX"
-                        elif "hdfc" in user_message:
-                            instrument_name = "HDFC"
-                            instrument_type = "EQUITY"
-                        elif "reliance" in user_message:
-                            instrument_name = "RELIANCE"
-                            instrument_type = "EQUITY"
-
-                        if instrument_name:
-                            # First search for the instrument
-                            search_result = await execute_tool(
-                                "search_instruments",
-                                {"query": instrument_name, "instrument_type": instrument_type, "limit": 1},
-                                access_token
-                            )
-
-                            if search_result.get("success") and search_result.get("data", {}).get("instruments"):
-                                instruments = search_result["data"]["instruments"]
-                                if len(instruments) > 0:
-                                    inst = instruments[0]
-                                    security_id = inst.get("security_id")
-                                    exchange_segment = inst.get("exchange_segment")
-
-                                    # Debug logging if fields are missing
-                                    if not security_id or not exchange_segment:
-                                        print(f"[chat] Warning: Missing fields in search result for {instrument_name}")
-                                        print(f"[chat] security_id: {security_id}, exchange_segment: {exchange_segment}")
-                                        print(f"[chat] Instrument keys: {list(inst.keys())}")
-                                        print(f"[chat] Full instrument data: {inst}")
-
-                                    if security_id and exchange_segment:
-                                        # Log which instrument is being used
-                                        instrument_details = {
-                                            "name": inst.get("display_name") or inst.get("symbol_name") or instrument_name,
-                                            "security_id": security_id,
-                                            "exchange_segment": exchange_segment,
-                                            "instrument_type": inst.get("instrument_type", "N/A"),
-                                            "symbol_name": inst.get("symbol_name", "N/A"),
-                                            "underlying_symbol": inst.get("underlying_symbol", "N/A")
-                                        }
-                                        print(f"[chat] Using instrument for analysis: {json.dumps(instrument_details, indent=2)}")
-
-                                        # Check if this is a trend/analysis query
-                                        is_trend_query = any(keyword in user_message for keyword in ["trend", "analysis", "performance", "movement", "direction", "how is", "how are"])
-
-                                        if is_trend_query:
-                                            # Use analyze_market for trend analysis
-                                            print(f"[chat] Calling analyze_market with security_id={security_id}, exchange_segment={exchange_segment}")
-                                            analysis_result = await execute_tool(
-                                                "analyze_market",
-                                                {"security_id": security_id, "exchange_segment": exchange_segment, "days": 30},
-                                                access_token
-                                            )
-
-                                            if analysis_result.get("success"):
-                                                instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
-                                                data = analysis_result.get("data", {})
-
-                                                # Add instrument details to response
-                                                instrument_info = f"**Instrument Details:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n"
-
-                                                # Format the analysis result
-                                                if data.get("formatted_analysis"):
-                                                    formatted = data["formatted_analysis"]
-                                                elif data.get("metrics"):
-                                                    metrics = data["metrics"]
-                                                    trend = metrics.get("trend", {})
-                                                    if trend:
-                                                        formatted = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\n{metrics.get('trend_summary', '')}"
-                                                    else:
-                                                        formatted = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\nHistorical data available but trend calculation failed."
-                                                else:
-                                                    formatted = json.dumps(data, indent=2)
-
-                                                return {"response": f"{instrument_info}Here's the trend analysis for {instrument_name_for_format}:\n\n{formatted}"}
-                                            else:
-                                                error_msg = analysis_result.get("error", "Unknown error")
-                                                return {"response": f"**Instrument Found:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n**Error:** Failed to analyze trend: {error_msg}"}
-                                        else:
-                                            # Regular price query - use get_market_quote
-                                            print(f"[chat] Calling get_market_quote with securities={{'{exchange_segment}': [{security_id}]}}")
-                                            quote_result = await execute_tool(
-                                                "get_market_quote",
-                                                {"securities": {exchange_segment: [security_id]}},
-                                                access_token
-                                            )
-
-                                            if quote_result.get("success"):
-                                                # Pass instrument name to formatting function for better symbol extraction
-                                                instrument_name_for_format = inst.get("display_name") or inst.get("symbol_name") or instrument_name
-                                                formatted = format_market_quote_result(quote_result.get("data", {}), instrument_name=instrument_name_for_format)
-
-                                                # Add instrument details to response
-                                                instrument_info = f"**Instrument Details:**\n- Name: {instrument_details['name']}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n- Symbol: {instrument_details['symbol_name']}\n\n"
-                                                return {"response": f"{instrument_info}Here's the current {instrument_name_for_format} data:\n\n{formatted}"}
-                                            else:
-                                                error_msg = quote_result.get("error", "Unknown error")
-                                                symbol_name = inst.get("display_name") or inst.get("symbol_name") or instrument_name
-                                                return {"response": f"**Instrument Found:**\n- Name: {symbol_name}\n- Security ID: {security_id}\n- Exchange: {exchange_segment}\n- Type: {instrument_details['instrument_type']}\n\n**Error:** Failed to fetch market data: {error_msg}"}
-                                    else:
-                                        return {"response": f"Found {instrument_name} but missing security_id or exchange_segment in search results."}
-                                else:
-                                    return {"response": f"Could not find {instrument_name} in the instrument database. Please check the spelling or try a different search term."}
-                            else:
-                                error_msg = search_result.get("error", "Unknown error")
-                                # Add more context to error message
-                                error_detail = search_result.get("data", {}).get("error_detail", "")
-                                if error_detail:
-                                    error_msg = f"{error_msg}. Details: {error_detail}"
-                                print(f"[chat] Search failed for {instrument_name}: {error_msg}")
-                                print(f"[chat] Search result: {search_result}")
-                                return {"response": f"Failed to search for {instrument_name}: {error_msg}"}
+                        # No server-side guessing/extraction fallback. The model should ask for missing info or call tools.
 
                 return {"response": content}
             return {"response": ""}
@@ -1339,34 +1212,38 @@ Provide a helpful, concise response with code examples when relevant."""
 
 CRITICAL WORKFLOW:
 1. When users ask about stocks, indices, or instruments by NAME (e.g., "NIFTY", "HDFC Bank", "RELIANCE"):
-   - FIRST: Call search_instruments with the name to find security_id and exchange_segment
-   - THEN: Use the returned security_id and exchange_segment for other operations (get_market_quote, get_historical_data, analyze_market, etc.)
+   - FIRST: Call find_instrument with the name to find security_id and exchange_segment
+   - THEN: Use the returned security_id and exchange_segment for other operations (get_quote, get_intraday_ohlcv, get_daily_ohlcv, analyze_market, etc.)
 
 2. When users ask about PRICES or CURRENT MARKET DATA:
-   - Call search_instruments first to get security_id and exchange_segment
-   - Then call get_market_quote with those values
+   - Call find_instrument first to get security_id and exchange_segment
+   - Then call get_quote with those values
    - Present the actual price data
 
 3. When users ask about TRENDS, ANALYSIS, or HISTORICAL PERFORMANCE:
-   - Call search_instruments first to get security_id and exchange_segment
-   - Then call analyze_market OR get_historical_data to get trend information
+   - Call find_instrument first to get security_id and exchange_segment
+   - Then call analyze_market OR daily/intraday OHLCV tools to get trend information
    - analyze_market provides comprehensive analysis (current price + historical trend) using daily data
-   - get_historical_data provides raw historical OHLCV data for custom analysis
-   - For daily data: use interval="daily" with dates in YYYY-MM-DD format
-   - For intraday data: use interval="1", "5", "15", "25", or "60" (minutes) with dates in YYYY-MM-DD HH:MM:SS format (market hours: 09:15:00 to 15:30:00)
+   - get_daily_ohlcv / get_intraday_ohlcv provide raw OHLCV data for custom analysis
+   - Use YYYY-MM-DD for from_date/to_date (no time components)
    - Intraday data returns candle objects with timestamp, time, date, OHLC, volume, and open_interest (for F&O)
    - For indices (NIFTY, SENSEX), use exchange_segment="IDX_I" and instrument_type="INDEX"
 
 4. When users ask about positions, holdings, or portfolio:
    - Use the available tools to fetch real data
    - DO NOT generate Python code or pseudo-code - use the actual function calling tools
-   - DO NOT ask users for more details - use the tools with the information you have
+   - If required parameters are missing for a tool, ASK the user for the missing fields (do not guess)
+
+GLOBAL RULES (NON-NEGOTIABLE):
+- Never guess or invent: security_id, exchange_segment, instrument_type, dates, intervals, strikes, expiries
+- Respect tool JSON schemas exactly (required fields + enums)
+- If a tool call is blocked due to missing/invalid parameters, respond with a clarification question
 
 5. Workflow examples:
    User: "What's the price of NIFTY?"
-   Step 1: Call search_instruments(query="NIFTY", instrument_type="INDEX") or find_instrument(query="NIFTY", instrument_type="INDEX")
+   Step 1: Call find_instrument(query="NIFTY", instrument_type="INDEX")
    Step 2: Extract security_id (should be 13 for NIFTY 50) and exchange_segment (should be "IDX_I") from the search results
-   Step 3: Call get_market_quote with securities={"IDX_I": [13]} (using the actual security_id from step 2)
+   Step 3: Call get_quote with securities={"IDX_I": [13]} (using the actual security_id from step 2)
    Step 4: Format and provide the actual price from the response
 
    IMPORTANT: Always use the exact security_id and exchange_segment returned from search_instruments/find_instrument. Do not guess or use hardcoded values.
@@ -1377,17 +1254,16 @@ CRITICAL WORKFLOW:
    Step 3: Analyze the trend data and provide insights about direction (up/down/neutral) and percentage change
 
 Available tools:
-- search_instruments: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
-- get_market_quote: Get current prices (requires security_id and exchange_segment from search_instruments)
-- get_historical_data: Get price history for trend analysis (requires security_id, exchange_segment, instrument_type, from_date, to_date, interval)
-  * For daily data: interval="daily", dates in YYYY-MM-DD format
-  * For intraday data: interval="1", "5", "15", "25", or "60" (minutes), dates in YYYY-MM-DD HH:MM:SS format (09:15:00 to 15:30:00)
-  * Returns OHLCV data: daily format has date/open/high/low/close/volume, intraday format adds timestamp/time/open_interest
+- find_instrument: Search for instruments by name/symbol (USE THIS FIRST when user mentions a stock/index by name)
+- get_quote: Get current prices (requires security_id and exchange_segment from find_instrument)
+- get_daily_ohlcv: Daily OHLCV (requires security_id, exchange_segment, instrument_type, from_date, to_date)
+- get_intraday_ohlcv: Intraday OHLCV (requires security_id, exchange_segment, instrument_type, interval, from_date, to_date)
+- get_historical_data: Legacy combined historical tool (requires interval; prefer the explicit OHLCV tools above)
 - analyze_market: Comprehensive market analysis with trend (requires security_id and exchange_segment) - USE THIS FOR TREND QUERIES
 - get_positions: Get user's open positions
 - get_holdings: Get user's holdings
 - get_fund_limits: Get balance and margin
-- get_option_chain: Get options data (requires security_id and exchange_segment)
+- get_option_chain: Get option chain (requires underlying_security_id, exchange_segment, expiry_date)
 
 IMPORTANT:
 - Always search for instruments first if the user mentions a stock/index by name

@@ -24,20 +24,12 @@ class GetQuoteTool(Tool):
     name = "get_quote"
     description = "Get real-time market quote (OHLC data) for securities. Returns current price, open, high, low, close, volume, and other market data. Use this to check current prices and market status."
 
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "securities": {
-                "type": "object",
-                "description": "Dictionary mapping exchange segments to list of security IDs. Example: {'NSE_EQ': [1333, 11536]} for HDFC Bank and Reliance, or {'IDX_I': [13]} for NIFTY 50",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "integer"}
-                }
-            }
-        },
-        "required": ["securities"]
-    }
+    try:
+        from agent.validation.schemas import MarketQuoteSchema
+    except ImportError:
+        from app.agent.validation.schemas import MarketQuoteSchema
+
+    input_schema = MarketQuoteSchema
 
     output_schema = {
         "type": "object",
@@ -99,7 +91,10 @@ class GetQuoteTool(Tool):
 
             return {
                 "success": True,
-                "quotes": quotes
+                # Preserve raw API response shape for existing formatters
+                "data": data,
+                # Also provide a normalized list for LLMs/clients that prefer it
+                "quotes": quotes,
             }
         else:
             return {"success": False, "error": result.get("error", "Failed to fetch quotes")}

@@ -11,6 +11,12 @@ import json
 import os
 from trading import trading_service
 from database import Database
+try:
+    from agent.validation.contracts import get_schema_for_tool
+    from agent.validation.guard import guard_tool_call
+except ImportError:
+    from app.agent.validation.contracts import get_schema_for_tool
+    from app.agent.validation.guard import guard_tool_call
 
 
 def get_access_token(access_token: Optional[str] = None) -> Optional[str]:
@@ -96,6 +102,33 @@ async def execute_tool(
             "error": "Access token required for trading operations. Please provide access_token parameter or set DHAN_ACCESS_TOKEN environment variable."
         }
 
+    # Normalize legacy argument names for guard validation.
+    payload_for_guard = function_args or {}
+    if function_name == "get_option_chain":
+        payload_for_guard = {
+            **(function_args or {}),
+            "underlying_security_id": (function_args or {}).get("underlying_security_id") or (function_args or {}).get("under_security_id"),
+            "exchange_segment": (function_args or {}).get("exchange_segment") or (function_args or {}).get("under_exchange_segment"),
+            "expiry_date": (function_args or {}).get("expiry_date") or (function_args or {}).get("expiry"),
+        }
+
+    # Guard legacy tool execution (missing/invalid args) BEFORE touching DhanHQ APIs
+    try:
+        schema = get_schema_for_tool(function_name, payload_for_guard)
+        if schema is not None:
+            check = guard_tool_call(intent=function_name, schema=schema, payload=payload_for_guard)
+            if check.get("action") != "PROCEED":
+                return {
+                    "success": False,
+                    "action": check.get("action"),
+                    "intent": function_name,
+                    "missing_fields": check.get("missing_fields", []),
+                    "invalid_fields": check.get("invalid_fields", []),
+                    "error": check.get("message", "Missing or invalid parameters."),
+                }
+    except Exception as e:
+        return {"success": False, "error": f"Guard validation error: {str(e)}"}
+
     try:
         # Route to appropriate TradingService method
         if function_name == "search_instruments":
@@ -133,7 +166,7 @@ async def execute_tool(
             instrument_type = function_args["instrument_type"]
             from_date = function_args["from_date"]
             to_date = function_args["to_date"]
-            interval = function_args.get("interval", "daily")
+            interval = function_args["interval"]
 
             print(f"[get_historical_data] Calling with:")
             print(f"  security_id: {security_id}")
@@ -174,11 +207,31 @@ async def execute_tool(
             return result
 
         elif function_name == "get_option_chain":
+            # Accept both legacy and canonical naming (normalize)
+            under_security_id = function_args.get("under_security_id") or function_args.get("underlying_security_id")
+            under_exchange_segment = function_args.get("under_exchange_segment") or function_args.get("exchange_segment")
+            expiry = function_args.get("expiry") or function_args.get("expiry_date")
+
+            if under_security_id is None or under_exchange_segment is None or expiry is None:
+                missing = []
+                if under_security_id is None:
+                    missing.append("underlying_security_id")
+                if under_exchange_segment is None:
+                    missing.append("exchange_segment")
+                if expiry is None:
+                    missing.append("expiry_date")
+                return {
+                    "success": False,
+                    "action": "ASK_USER",
+                    "missing_fields": missing,
+                    "error": f"I need {', '.join(missing)} to proceed.",
+                }
+
             result = trading_service.get_option_chain(
                 access_token,
-                function_args["under_security_id"],
-                function_args["under_exchange_segment"],
-                function_args["expiry"]
+                int(under_security_id),
+                str(under_exchange_segment),
+                str(expiry),
             )
             return result
 
