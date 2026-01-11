@@ -670,9 +670,20 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
             if tools:
                 payload["tools"] = tools
                 # For trading requests, force tool usage if the query is about prices/positions
-                if access_token and any(keyword in (messages[-1].get("content", "") or "").lower()
-                                      for keyword in ["price", "quote", "position", "holding", "p&l", "portfolio", "nifty", "hdfc", "reliance"]):
-                    # Force tool usage for price/position queries
+                # Check all user messages for trading-related keywords
+                user_messages = [msg.get("content", "").lower() for msg in messages if msg.get("role") == "user"]
+                combined_user_content = " ".join(user_messages)
+                
+                trading_keywords = [
+                    "price", "quote", "position", "positions", "holding", "holdings",
+                    "p&l", "pnl", "profit", "loss", "portfolio", "balance", "fund",
+                    "funds", "margin", "order", "orders", "trade", "trades",
+                    "nifty", "hdfc", "reliance", "tcs", "infy", "sensex", "bank nifty",
+                    "current", "what are", "show me", "get my", "fetch", "search"
+                ]
+                
+                if access_token and any(keyword in combined_user_content for keyword in trading_keywords):
+                    # Force tool usage for trading-related queries
                     payload["tool_choice"] = "required"
                 else:
                     payload["tool_choice"] = "auto"  # Let model decide when to use tools
