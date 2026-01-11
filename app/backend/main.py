@@ -11,6 +11,14 @@ import asyncio
 import threading
 from datetime import datetime, timedelta
 
+# Try to import Ollama library, fall back to HTTP if not available
+try:
+    from ollama import AsyncClient
+    OLLAMA_LIBRARY_AVAILABLE = True
+except ImportError:
+    OLLAMA_LIBRARY_AVAILABLE = False
+    print("Warning: ollama library not installed. Using HTTP requests instead. Install with: pip install ollama")
+
 from database import Database
 from models import Project, File, ChatMessage
 from trading import trading_service
@@ -32,10 +40,19 @@ def format_market_quote_result(data, instrument_name=None):
     quote_data = None
 
     # Debug: Log the structure we received
-    import json
     print(f"[format_market_quote_result] Received data type: {type(data)}")
     if isinstance(data, dict):
         print(f"[format_market_quote_result] Top-level keys: {list(data.keys())}")
+        # Log full structure for debugging (truncated if too large)
+        data_str = json.dumps(data, indent=2)
+        if len(data_str) > 1000:
+            print(f"[format_market_quote_result] Data structure (first 1000 chars):\n{data_str[:1000]}...")
+        else:
+            print(f"[format_market_quote_result] Full data structure:\n{data_str}")
+    elif isinstance(data, list):
+        print(f"[format_market_quote_result] Data is a list with {len(data)} items")
+        if len(data) > 0:
+            print(f"[format_market_quote_result] First item: {json.dumps(data[0], indent=2)[:500]}")
 
     if isinstance(data, dict):
         # Try multiple possible response structures
@@ -207,9 +224,109 @@ Volume: {volume}
         # If we couldn't find quote_data, log what we received
         print(f"[format_market_quote_result] Could not extract quote_data. Data structure: {json.dumps(data, indent=2)[:500]}")
 
-    # If we couldn't find the data, return the raw structure for debugging
+        # Try one more structure: check if data is a list with quote objects
+        if isinstance(data, list) and len(data) > 0:
+            print(f"[format_market_quote_result] Data is a list, trying first item as quote_data")
+            first_item = data[0]
+            if isinstance(first_item, dict):
+                quote_data = first_item
+                # Re-run extraction with this quote_data
+                # (We'll handle this by checking quote_data again below)
+
+        # If still no quote_data, return detailed error with raw structure
+        if not quote_data:
+            # Show raw structure for debugging
+            raw_structure = json.dumps(data, indent=2)
+            if len(raw_structure) > 2000:
+                raw_structure = raw_structure[:2000] + "... (truncated)"
+
+            return f"""No market data available.
+
+**Debugging Information:**
+The API returned data, but it doesn't match expected structures. Here's what was received:
+
+```json
+{raw_structure}
+```
+
+**Possible reasons:**
+1. Market is closed (indices may not have data outside trading hours)
+2. API response structure changed
+3. Security ID or exchange segment format issue
+
+**Troubleshooting:**
+- Check if market is open (9:15 AM - 3:30 PM IST)
+- Verify security_id={instrument_name or 'N/A'} and exchange_segment are correct
+- Try using the REST API endpoint directly: `/api/trading/market/quote`
+"""
+
+    # If we couldn't find the data, return detailed error with raw structure
     if not formatted:
-        # Try to extract any numeric values that might be prices
+        # Show raw structure for debugging
+        raw_structure = json.dumps(data, indent=2)
+        if len(raw_structure) > 2000:
+            raw_structure = raw_structure[:2000] + "... (truncated)"
+
+        # Check if it's actually empty (market closed scenario)
+        is_empty = False
+        if isinstance(data, dict):
+            if "data" in data:
+                if isinstance(data["data"], dict):
+                    if "data" in data["data"]:
+                        nested = data["data"]["data"]
+                        is_empty = isinstance(nested, dict) and len(nested) == 0
+                    else:
+                        is_empty = len(data["data"]) == 0
+                else:
+                    is_empty = not data["data"]
+            else:
+                is_empty = len(data) == 0
+
+        if is_empty:
+            return f"""No market data available.
+
+**Possible reasons:**
+1. **Market is closed** - Indian stock market hours are 9:15 AM - 3:30 PM IST (Monday-Friday)
+2. **Weekend/Holiday** - Markets are closed on weekends and public holidays
+3. **API returned empty response** - The DhanHQ API may not have data for this instrument at this time
+
+**Debugging info:**
+- Instrument: {instrument_name or 'NIFTY'}
+- Security ID: 13
+- Exchange: IDX_I
+- Response structure: Empty or null data
+
+**What to try:**
+- Check if market is currently open
+- Verify the security_id and exchange_segment are correct
+- Try again during market hours (9:15 AM - 3:30 PM IST)
+
+**Raw API Response:**
+```json
+{raw_structure}
+```"""
+        else:
+            return f"""No market data available.
+
+**Debugging Information:**
+The API returned data, but it doesn't match expected structures. Here's what was received:
+
+```json
+{raw_structure}
+```
+
+**Possible reasons:**
+1. Market is closed (indices may not have data outside trading hours)
+2. API response structure changed
+3. Security ID or exchange segment format issue
+
+**Troubleshooting:**
+- Check if market is open (9:15 AM - 3:30 PM IST)
+- Verify security_id and exchange_segment are correct
+- Check backend logs for `[get_market_quote]` and `[format_market_quote_result]` entries"""
+
+    # Try to extract any numeric values that might be prices (fallback)
+    if not formatted:
         if isinstance(data, dict):
             # Look for any numeric fields that might be prices
             for key, value in data.items():
@@ -411,16 +528,21 @@ async def shutdown_event():
             pass
 
 # AI Provider configuration
+# Use Ollama directly at localhost:11434 (default Ollama port)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 # OpenAI-compatible API (e.g., Open WebUI, vLLM, Ollama Router, etc.)
+# Set to None to use Ollama directly instead
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE", None)  # e.g., "http://localhost:8080/v1"
 OPENAI_API_MODEL = os.getenv("OPENAI_API_MODEL", "nemesis-coder")
 # Ollama Router native endpoint (alternative to OpenAI-compatible)
+# Set to None to use Ollama directly instead
 OLLAMA_ROUTER_BASE = os.getenv("OLLAMA_ROUTER_BASE", None)  # e.g., "http://localhost:8080"
 # Use OpenAI-compatible API if configured, otherwise fall back to Ollama
+# Set to "false" to use Ollama directly at localhost:11434
 USE_OPENAI_API = os.getenv("USE_OPENAI_API", "false").lower() == "true"
 # Use Ollama Router native endpoint (supports X-Task header for specialized tasks)
+# Set to "false" to use Ollama directly at localhost:11434
 USE_OLLAMA_ROUTER = os.getenv("USE_OLLAMA_ROUTER", "false").lower() == "true"
 
 
@@ -734,6 +856,31 @@ async def generate_openai_response_stream(prompt: str):
 
 async def generate_ollama_router_response(prompt: str, task: Optional[str] = None, model: Optional[str] = None):
     """Generate non-streaming response from Ollama Router native endpoint"""
+    if OLLAMA_LIBRARY_AVAILABLE:
+        # Use Ollama Python library if available
+        try:
+            headers = {}
+            if task:
+                headers["X-Task"] = task
+
+            client = AsyncClient(host=OLLAMA_ROUTER_BASE, headers=headers)
+            messages = [{"role": "user", "content": prompt}]
+
+            response = await client.chat(
+                model=model or OPENAI_API_MODEL,
+                messages=messages,
+                stream=False
+            )
+
+            content = response.get('message', {}).get('content', '')
+            return {"response": content}
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection" in error_msg or "refused" in error_msg.lower():
+                raise HTTPException(status_code=503, detail=f"Ollama Router is not reachable at {OLLAMA_ROUTER_BASE}")
+            raise HTTPException(status_code=500, detail=error_msg)
+
+    # Fallback to HTTP requests if library not available
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OLLAMA_ROUTER_BASE}/api/chat"
@@ -894,8 +1041,17 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                                                      inst.get("trading_symbol") or
                                                                      None)
                                 elif function_name == "get_market_quote" or function_name == "get_quote":
+                                    # Log the raw data before formatting for debugging
+                                    print(f"[get_market_quote] Raw data before formatting: {json.dumps(data, indent=2)[:1000]}")
                                     # Format market quote data nicely, using instrument name from search if available
                                     formatted_result = format_market_quote_result(data, instrument_name=instrument_name_from_search)
+
+                                    # If formatting failed (returns "No market data available"), include raw structure
+                                    if formatted_result.startswith("No market data available"):
+                                        raw_data_str = json.dumps(data, indent=2)
+                                        if len(raw_data_str) > 1500:
+                                            raw_data_str = raw_data_str[:1500] + "... (truncated)"
+                                        formatted_result = f"{formatted_result}\n\n**Raw API Response:**\n```json\n{raw_data_str}\n```"
                                 elif function_name == "analyze_market":
                                     # Format market analysis result with trend information
                                     if data.get("formatted_analysis"):
@@ -962,24 +1118,144 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                     messages.append(message)
                     messages.extend(tool_results)
 
-                    # Get final response with tool results
-                    payload["messages"] = messages
-                    # Remove tool_choice for final response
-                    if "tool_choice" in payload:
-                        del payload["tool_choice"]
-                    response = await client.post(url, json=payload)
-                    if response.status_code != 200:
-                        raise HTTPException(status_code=response.status_code, detail=response.text)
-                    data = response.json()
+                    # AGENTIC LOOP: Allow multiple rounds of tool calls
+                    # The LLM can make more tool calls based on previous results
+                    max_iterations = 5  # Prevent infinite loops
+                    iteration = 0
+
+                    while iteration < max_iterations:
+                        iteration += 1
+                        print(f"[agentic_loop] Iteration {iteration}/{max_iterations}")
+
+                        # Get response with tool results
+                        payload["messages"] = messages
+                        # Keep tools available for next iteration
+                        if tools:
+                            payload["tools"] = tools
+                            payload["tool_choice"] = "auto"  # Let model decide if more tools needed
+
+                        response = await client.post(url, json=payload)
+                        if response.status_code != 200:
+                            raise HTTPException(status_code=response.status_code, detail=response.text)
+                        data = response.json()
+
+                        if "choices" not in data or len(data["choices"]) == 0:
+                            break
+
+                        next_message = data["choices"][0]["message"]
+
+                        # Check if model wants to make more tool calls
+                        if "tool_calls" in next_message and next_message["tool_calls"]:
+                            print(f"[agentic_loop] Model wants to make {len(next_message['tool_calls'])} more tool call(s)")
+
+                            # Execute the new tool calls
+                            new_tool_results = []
+                            for tool_call in next_message["tool_calls"]:
+                                function_name = tool_call["function"]["name"]
+                                try:
+                                    function_args = json.loads(tool_call["function"]["arguments"])
+                                except json.JSONDecodeError:
+                                    function_args = {}
+
+                                print(f"[agentic_loop] Executing: {function_name} with args: {json.dumps(function_args, indent=2)[:200]}")
+
+                                # Execute the tool
+                                result = await execute_tool(function_name, function_args, access_token)
+
+                                # Format result
+                                if isinstance(result, dict):
+                                    if result.get("success"):
+                                        data = result.get("data", {})
+                                        # Use same formatting logic as before
+                                        if function_name == "search_instruments" or function_name == "find_instrument":
+                                            formatted_result = format_search_results(data)
+                                        elif function_name == "get_market_quote" or function_name == "get_quote":
+                                            # Log the raw data before formatting for debugging
+                                            print(f"[agentic_loop] get_market_quote raw data: {json.dumps(data, indent=2)[:1000]}")
+                                            formatted_result = format_market_quote_result(data, instrument_name=instrument_name_from_search)
+
+                                            # If formatting failed (returns "No market data available"), include raw structure
+                                            if formatted_result.startswith("No market data available"):
+                                                raw_data_str = json.dumps(data, indent=2)
+                                                if len(raw_data_str) > 1500:
+                                                    raw_data_str = raw_data_str[:1500] + "... (truncated)"
+                                                formatted_result = f"{formatted_result}\n\n**Raw API Response:**\n```json\n{raw_data_str}\n```"
+                                        elif function_name == "analyze_market":
+                                            if data.get("formatted_analysis"):
+                                                formatted_result = data["formatted_analysis"]
+                                            elif data.get("metrics"):
+                                                metrics = data["metrics"]
+                                                trend = metrics.get("trend", {})
+                                                if trend:
+                                                    formatted_result = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\n{metrics.get('trend_summary', '')}"
+                                                else:
+                                                    formatted_result = f"Current Price: ₹{metrics.get('current_price', 'N/A')}\n\nHistorical data available but trend calculation failed."
+                                            else:
+                                                formatted_result = json.dumps(data, indent=2)
+                                        elif function_name == "get_historical_data":
+                                            if isinstance(data, list) and len(data) > 0:
+                                                first = data[0] if isinstance(data[0], dict) else {}
+                                                last = data[-1] if isinstance(data[-1], dict) else {}
+                                                first_close = first.get("close") or first.get("CLOSE") or "N/A"
+                                                last_close = last.get("close") or last.get("CLOSE") or "N/A"
+                                                formatted_result = f"Historical Data ({len(data)} data points):\nFirst Close: ₹{first_close}\nLast Close: ₹{last_close}"
+                                                if isinstance(first_close, (int, float)) and isinstance(last_close, (int, float)) and first_close > 0:
+                                                    change = last_close - first_close
+                                                    change_pct = (change / first_close) * 100
+                                                    formatted_result += f"\nChange: ₹{change:.2f} ({change_pct:+.2f}%)\nDirection: {'📈 Upward' if change > 0 else '📉 Downward' if change < 0 else '➡️ Neutral'}"
+                                            else:
+                                                formatted_result = json.dumps(data, indent=2)
+                                        else:
+                                            formatted_result = json.dumps(data, indent=2)
+                                        content = f"✅ Success!\n\n{formatted_result}"
+                                    else:
+                                        error_msg = result.get("error", "Unknown error")
+                                        content = f"❌ Error: {error_msg}"
+                                else:
+                                    content = json.dumps(result, indent=2)
+
+                                new_tool_results.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call["id"],
+                                    "name": function_name,
+                                    "content": content
+                                })
+
+                                # Update tool calls metadata for UI
+                                tool_calls_metadata.append({
+                                    "tool": function_name,
+                                    "args": function_args,
+                                    "status": "success" if (isinstance(result, dict) and result.get("success")) else "error",
+                                    "result": content[:200],
+                                    "timestamp": datetime.now().isoformat()
+                                })
+
+                            # Add assistant message with tool calls and tool results
+                            messages.append(next_message)
+                            messages.extend(new_tool_results)
+
+                            # Continue loop to see if model wants to make more calls
+                            continue
+                        else:
+                            # No more tool calls - model has final answer
+                            final_content = next_message.get("content", "")
+                            print(f"[agentic_loop] Final response after {iteration} iteration(s)")
+
+                            # Include tool calls metadata in response for UI display
+                            return {
+                                "response": final_content,
+                                "tool_calls": tool_calls_metadata if tool_calls_metadata else [],
+                                "reasoning": f"Used {len(tool_calls_metadata)} tool(s) in {iteration} iteration(s) to answer your question" if tool_calls_metadata else None
+                            }
+
+                    # If we hit max iterations, return the last response
                     if "choices" in data and len(data["choices"]) > 0:
                         final_message = data["choices"][0]["message"]
-                        final_content = final_message.get("content", "")
-
-                        # Include tool calls metadata in response for UI display
+                        final_content = final_message.get("content", "Reached maximum iterations. Please try a simpler query.")
                         return {
                             "response": final_content,
                             "tool_calls": tool_calls_metadata if tool_calls_metadata else [],
-                            "reasoning": f"Used {len(tool_calls_metadata)} tool(s) to answer your question" if tool_calls_metadata else None
+                            "reasoning": f"Used {len(tool_calls_metadata)} tool(s) in {max_iterations} iteration(s)" if tool_calls_metadata else None
                         }
 
                 # If no tool calls but tools were available and this is a trading query,
@@ -1030,6 +1306,33 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
 
 async def generate_ollama_response_stream(prompt: str):
     """Generate streaming response from Ollama"""
+    if OLLAMA_LIBRARY_AVAILABLE:
+        # Use Ollama Python library if available
+        try:
+            client = AsyncClient(host=OLLAMA_BASE_URL)
+            messages = [{'role': 'user', 'content': prompt}]
+
+            async for chunk in await client.chat(
+                model=OLLAMA_MODEL,
+                messages=messages,
+                stream=True
+            ):
+                content = chunk.get('message', {}).get('content', '')
+                if content:
+                    yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+
+                if chunk.get('done', False):
+                    yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+                    break
+            return
+        except Exception as e:
+            error_msg = f"⚠️ Error: {str(e)}"
+            if "Connection" in str(e) or "refused" in str(e).lower():
+                error_msg = "⚠️ Ollama is not running. Please start Ollama: `ollama serve`"
+            yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
+            return
+
+    # Fallback to HTTP requests if library not available
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OLLAMA_BASE_URL}/api/generate"
@@ -1057,17 +1360,36 @@ async def generate_ollama_response_stream(prompt: str):
                         except json.JSONDecodeError:
                             continue
     except httpx.ConnectError:
-        # Send error through stream instead of raising exception
         error_msg = "⚠️ Ollama is not running. Please start Ollama: `ollama serve`"
         yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
     except Exception as e:
-        # Send error through stream instead of raising exception
         error_msg = f"❌ Error: {str(e)}"
         yield f"data: {json.dumps({'content': error_msg, 'done': True, 'error': True})}\n\n"
 
 
 async def generate_ollama_response(prompt: str):
     """Generate non-streaming response from Ollama"""
+    if OLLAMA_LIBRARY_AVAILABLE:
+        # Use Ollama Python library if available
+        try:
+            client = AsyncClient(host=OLLAMA_BASE_URL)
+            messages = [{'role': 'user', 'content': prompt}]
+
+            response = await client.chat(
+                model=OLLAMA_MODEL,
+                messages=messages,
+                stream=False
+            )
+
+            content = response.get('message', {}).get('content', '')
+            return {"response": content}
+        except Exception as e:
+            error_msg = str(e)
+            if "Connection" in error_msg or "refused" in error_msg.lower():
+                raise HTTPException(status_code=503, detail="Ollama is not running. Please start Ollama: ollama serve")
+            raise HTTPException(status_code=500, detail=error_msg)
+
+    # Fallback to HTTP requests if library not available
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             url = f"{OLLAMA_BASE_URL}/api/generate"

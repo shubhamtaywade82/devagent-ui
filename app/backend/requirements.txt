@@ -8,4 +8,5 @@ httpx==0.25.2
 aiohttp==3.9.1
 dhanhq>=2.0.0
 jsonschema>=4.23.0
+ollama>=0.1.0
 
