@@ -97,7 +97,7 @@ function TradingPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate("/trading/ai")}
+            onClick={() => window.open("/trading/ai", "_blank")}
             className="px-4 py-2 rounded-lg text-sm font-medium transition-colors bg-green-600 hover:bg-green-500 text-white"
             title="Open Trading AI Assistant in full page"
           >

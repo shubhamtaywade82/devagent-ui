@@ -24,13 +24,18 @@ def format_market_quote_result(data):
         return "No market data available"
 
     formatted = []
-
-    # DhanHQ returns nested structure: data.data.data.{exchange_segment}.{security_id}
-    # Navigate through the nested structure
     quote_data = None
 
+    # Debug: Log the structure we received
+    import json
+    print(f"[format_market_quote_result] Received data type: {type(data)}")
     if isinstance(data, dict):
-        # Check for empty data first
+        print(f"[format_market_quote_result] Top-level keys: {list(data.keys())}")
+
+    if isinstance(data, dict):
+        # Try multiple possible response structures
+
+        # Structure 1: data.data.data.{exchange_segment}.{security_id}
         if "data" in data and isinstance(data["data"], dict):
             if "data" in data["data"]:
                 nested_data = data["data"]["data"]
@@ -40,16 +45,21 @@ def format_market_quote_result(data):
 
                 # This is the nested structure: data.data.data.{exchange_segment}
                 nested = nested_data
+                print(f"[format_market_quote_result] Nested data keys: {list(nested.keys()) if isinstance(nested, dict) else 'not a dict'}")
+
                 # Iterate through exchange segments (IDX_I, NSE_EQ, NSE_IDX, etc.)
                 # Try IDX_I first for indices, then other segments
                 for exchange_seg in ["IDX_I", "NSE_IDX", "BSE_IDX", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"]:
                     if exchange_seg in nested:
                         securities = nested[exchange_seg]
+                        print(f"[format_market_quote_result] Found segment {exchange_seg}, securities type: {type(securities)}")
                         if isinstance(securities, dict):
+                            print(f"[format_market_quote_result] Security IDs in {exchange_seg}: {list(securities.keys())}")
                             # Iterate through security IDs
                             for security_id, quote_info in securities.items():
                                 if isinstance(quote_info, dict) and quote_info:
                                     quote_data = quote_info
+                                    print(f"[format_market_quote_result] Found quote data for security_id {security_id}, keys: {list(quote_data.keys())}")
                                     break
                             if quote_data:
                                 break
@@ -62,44 +72,97 @@ def format_market_quote_result(data):
                             for security_id, quote_info in securities.items():
                                 if isinstance(quote_info, dict) and quote_info:
                                     quote_data = quote_info
+                                    print(f"[format_market_quote_result] Found quote data in segment {exchange_seg}, security_id {security_id}")
                                     break
                             if quote_data:
                                 break
-        else:
-            # Try direct access - might be flat structure
-            quote_data = data
+
+        # Structure 2: Direct exchange segment keys (IDX_I, NSE_EQ, etc.) at top level
+        if not quote_data:
+            for exchange_seg in ["IDX_I", "NSE_IDX", "BSE_IDX", "NSE_EQ", "BSE_EQ", "NSE_FO", "BSE_FO"]:
+                if exchange_seg in data:
+                    securities = data[exchange_seg]
+                    if isinstance(securities, dict):
+                        for security_id, quote_info in securities.items():
+                            if isinstance(quote_info, dict) and quote_info:
+                                quote_data = quote_info
+                                print(f"[format_market_quote_result] Found quote data in top-level {exchange_seg}, security_id {security_id}")
+                                break
+                        if quote_data:
+                            break
+
+        # Structure 3: Direct flat structure
+        if not quote_data:
+            # Check if data itself contains quote fields
+            if any(key in data for key in ["LTP", "ltp", "lastPrice", "OPEN", "open", "HIGH", "high"]):
+                quote_data = data
+                print(f"[format_market_quote_result] Using data as flat quote structure")
 
     # Extract quote information with multiple field name variations
     if quote_data and isinstance(quote_data, dict):
         # Try various field name formats from DhanHQ API
+        # Check for OHLC structure first (some APIs return OHLC as nested object)
+        ohlc_data = quote_data.get("ohlc") or quote_data.get("OHLC") or {}
+        if not isinstance(ohlc_data, dict):
+            ohlc_data = {}
+
         symbol = (quote_data.get("symbol") or quote_data.get("SYMBOL") or
                  quote_data.get("tradingSymbol") or quote_data.get("TRADING_SYMBOL") or
-                 quote_data.get("name") or quote_data.get("NAME") or "N/A")
+                 quote_data.get("trading_symbol") or quote_data.get("name") or
+                 quote_data.get("NAME") or quote_data.get("instrumentName") or "N/A")
 
+        # LTP - try multiple variations
         ltp = (quote_data.get("LTP") or quote_data.get("ltp") or
               quote_data.get("lastPrice") or quote_data.get("LAST_PRICE") or
-              quote_data.get("last_traded_price") or "N/A")
+              quote_data.get("last_price") or quote_data.get("last_traded_price") or
+              quote_data.get("currentPrice") or quote_data.get("CURRENT_PRICE") or "N/A")
 
-        open_price = (quote_data.get("OPEN") or quote_data.get("open") or
+        # Open - check OHLC first, then direct fields
+        open_price = (ohlc_data.get("open") or ohlc_data.get("OPEN") or
+                     quote_data.get("OPEN") or quote_data.get("open") or
                      quote_data.get("openPrice") or quote_data.get("OPEN_PRICE") or
                      quote_data.get("open_price") or "N/A")
 
-        high = (quote_data.get("HIGH") or quote_data.get("high") or
+        # High - check OHLC first, then direct fields
+        high = (ohlc_data.get("high") or ohlc_data.get("HIGH") or
+               quote_data.get("HIGH") or quote_data.get("high") or
                quote_data.get("highPrice") or quote_data.get("HIGH_PRICE") or
                quote_data.get("high_price") or "N/A")
 
-        low = (quote_data.get("LOW") or quote_data.get("low") or
+        # Low - check OHLC first, then direct fields
+        low = (ohlc_data.get("low") or ohlc_data.get("LOW") or
+              quote_data.get("LOW") or quote_data.get("low") or
               quote_data.get("lowPrice") or quote_data.get("LOW_PRICE") or
               quote_data.get("low_price") or "N/A")
 
-        close = (quote_data.get("CLOSE") or quote_data.get("close") or
+        # Close - check OHLC first, then direct fields
+        close = (ohlc_data.get("close") or ohlc_data.get("CLOSE") or
+                quote_data.get("CLOSE") or quote_data.get("close") or
                 quote_data.get("closePrice") or quote_data.get("CLOSE_PRICE") or
                 quote_data.get("previousClose") or quote_data.get("PREV_CLOSE") or
-                quote_data.get("prev_close") or "N/A")
+                quote_data.get("prev_close") or quote_data.get("prevClose") or "N/A")
 
+        # Volume
         volume = (quote_data.get("VOLUME") or quote_data.get("volume") or
                  quote_data.get("totalVolume") or quote_data.get("TOTAL_VOLUME") or
-                 quote_data.get("total_volume") or "N/A")
+                 quote_data.get("total_volume") or quote_data.get("tradedVolume") or "N/A")
+
+        # Format numeric values properly
+        def format_price(value):
+            if value == "N/A" or value is None:
+                return "N/A"
+            try:
+                if isinstance(value, str):
+                    value = float(value)
+                return f"{value:.2f}" if value != 0 else "N/A"
+            except (ValueError, TypeError):
+                return "N/A"
+
+        ltp = format_price(ltp)
+        open_price = format_price(open_price)
+        high = format_price(high)
+        low = format_price(low)
+        close = format_price(close)
 
         # Format the output
         formatted.append(f"""
@@ -111,6 +174,9 @@ Low: ₹{low}
 Previous Close: ₹{close}
 Volume: {volume}
 """)
+    else:
+        # If we couldn't find quote_data, log what we received
+        print(f"[format_market_quote_result] Could not extract quote_data. Data structure: {json.dumps(data, indent=2)[:500]}")
 
     # If we couldn't find the data, return the raw structure for debugging
     if not formatted:
@@ -122,8 +188,12 @@ Volume: {volume}
                     formatted.append(f"{key}: {value}")
 
         if not formatted:
-            # Last resort: return formatted JSON
-            return f"Market data received but format not recognized. Raw data:\n{json.dumps(data, indent=2)}"
+            # Last resort: return formatted JSON with helpful message
+            raw_json = json.dumps(data, indent=2)
+            # Limit the output size for readability
+            if len(raw_json) > 2000:
+                raw_json = raw_json[:2000] + "\n... (truncated)"
+            return f"Market data received but format not recognized. This might indicate:\n1. Market is closed\n2. API response format has changed\n3. Security ID or exchange segment is incorrect\n\nRaw response data (for debugging):\n{raw_json}"
 
     return "\n".join(formatted) if formatted else "No market data available"
 

@@ -66,25 +66,22 @@ async def execute_tool(
                 function_args.get("case_sensitive", False)
             )
         elif function_name == "get_market_quote":
-            # Handle IDX_I format for indices - convert to proper format for DhanHQ API
+            # Handle IDX_I format for indices - use IDX_I directly (DhanHQ API supports it)
             securities = function_args["securities"]
-            # If IDX_I is used, we need to handle it specially
-            # DhanHQ API might need it in a different format
-            processed_securities = {}
-            for exchange_seg, security_ids in securities.items():
-                if exchange_seg == "IDX_I":
-                    # For indices, try both IDX_I and NSE_IDX formats
-                    # Some APIs might accept IDX_I directly, others might need NSE_IDX
-                    processed_securities["IDX_I"] = security_ids
-                    # Also try NSE_IDX as fallback
-                    processed_securities["NSE_IDX"] = security_ids
-                else:
-                    processed_securities[exchange_seg] = security_ids
+            # Use securities as-is - DhanHQ API should handle IDX_I correctly
+            print(f"[get_market_quote] Calling with securities: {securities}")
 
             result = trading_service.get_market_quote(
                 access_token,
-                processed_securities
+                securities
             )
+
+            # Log the result for debugging
+            if result.get("success"):
+                print(f"[get_market_quote] Success - data keys: {list(result.get('data', {}).keys()) if isinstance(result.get('data'), dict) else 'not a dict'}")
+            else:
+                print(f"[get_market_quote] Failed - error: {result.get('error')}")
+
             return result
 
         elif function_name == "get_historical_data":
@@ -189,76 +186,81 @@ async def find_instrument_by_segment(
         search_symbol = symbol if case_sensitive else symbol.upper()
         print(f"Searching for '{search_symbol}' in {len(instruments)} instruments from segment {exchange_segment}")
 
-        for inst in instruments:
-            # Get instrument type
+        # Two-pass approach: First pass for exact matches, second pass for contains matches
+        # This ensures exact matches are always prioritized, even if contains matches appear earlier in the list
+
+        def process_instrument(inst, collect_contains=False):
+            """Process a single instrument and return match info if found"""
             inst_type = (inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "").upper()
 
-            matches = False
-
-            # Priority-based matching: underlying_symbol > symbol_name > display_name
             # Get all fields (normalize case if needed)
             underlying_symbol = inst.get("UNDERLYING_SYMBOL") or ""
             symbol_name = inst.get("SYMBOL_NAME") or ""
             display_name = inst.get("DISPLAY_NAME") or ""
+            trading_symbol = inst.get("TRADING_SYMBOL") or inst.get("SEM_TRADING_SYMBOL") or ""
 
             if not case_sensitive:
-                underlying_symbol = underlying_symbol.upper()
-                symbol_name = symbol_name.upper()
-                display_name = display_name.upper()
+                underlying_symbol = underlying_symbol.upper().strip()
+                symbol_name = symbol_name.upper().strip()
+                display_name = display_name.upper().strip()
+                trading_symbol = trading_symbol.upper().strip()
 
-            # 1. Check underlying_symbol first (highest priority)
-            if underlying_symbol:
-                if exact_match:
-                    matches = underlying_symbol == search_symbol
-                else:
-                    matches = search_symbol in underlying_symbol
+            match_priority = None
+            match_field = None
 
-                if matches:
-                    print(f"Found match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')}")
+            # Try EXACT matches first
+            if underlying_symbol == search_symbol:
+                match_priority = 1
+                match_field = "underlying_symbol"
+                print(f"Found EXACT match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')}")
+            elif symbol_name == search_symbol:
+                match_priority = 2
+                match_field = "symbol_name"
+                print(f"Found EXACT match by symbol_name: {inst.get('SYMBOL_NAME')}")
+            elif display_name == search_symbol:
+                match_priority = 3
+                match_field = "display_name"
+                print(f"Found EXACT match by display_name: {inst.get('DISPLAY_NAME')}")
+            # Only check contains matches if collect_contains is True
+            elif collect_contains and not exact_match:
+                if underlying_symbol and search_symbol in underlying_symbol:
+                    match_priority = 4
+                    match_field = "underlying_symbol"
+                    print(f"Found CONTAINS match by underlying_symbol: {inst.get('UNDERLYING_SYMBOL')}")
+                elif symbol_name and search_symbol in symbol_name:
+                    match_priority = 5
+                    match_field = "symbol_name"
+                    print(f"Found CONTAINS match by symbol_name: {inst.get('SYMBOL_NAME')}")
+                elif display_name and search_symbol in display_name:
+                    match_priority = 6
+                    match_field = "display_name"
+                    print(f"Found CONTAINS match by display_name: {inst.get('DISPLAY_NAME')}")
+                elif trading_symbol and search_symbol in trading_symbol:
+                    match_priority = 7
+                    match_field = "trading_symbol"
+                    print(f"Found CONTAINS match by trading_symbol: {trading_symbol}")
 
-            # 2. If no match, check symbol_name (second priority)
-            if not matches and symbol_name:
-                if exact_match:
-                    matches = symbol_name == search_symbol
-                else:
-                    matches = search_symbol in symbol_name
+            if match_priority is None:
+                return None
 
-                if matches:
-                    print(f"Found match by symbol_name: {inst.get('SYMBOL_NAME')}")
+            security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
+            exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
+            segment = inst.get("SEGMENT") or inst.get("SEM_SEGMENT") or ""
 
-            # 3. If still no match, check display_name (third priority)
-            if not matches and display_name:
-                if exact_match:
-                    matches = display_name == search_symbol
-                else:
-                    matches = search_symbol in display_name
+            # Map exchange segment correctly - ensure indices use IDX_I
+            final_exchange_segment = exchange_segment
+            segment_upper = segment.upper()
+            if segment_upper == "I" or segment_upper == "INDEX" or inst_type == "INDEX":
+                final_exchange_segment = "IDX_I"
+            elif exchange_segment == "IDX_I" and segment_upper != "I":
+                return None  # Skip if we requested IDX_I but this isn't an index
 
-                if matches:
-                    print(f"Found match by display_name: {inst.get('DISPLAY_NAME')}")
-
-            # 4. As last resort, check trading_symbol (lowest priority)
-            if not matches:
-                trading_symbol = inst.get("TRADING_SYMBOL") or ""
-                if trading_symbol:
-                    trading_symbol_upper = trading_symbol.upper() if not case_sensitive else trading_symbol
-                    if exact_match:
-                        matches = trading_symbol_upper == search_symbol
-                    else:
-                        matches = search_symbol in trading_symbol_upper
-
-                    if matches:
-                        print(f"Found match by trading_symbol: {trading_symbol}")
-
-            if matches:
-                security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
-                exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
-                segment = inst.get("SEGMENT") or inst.get("SEM_SEGMENT") or ""
-
-                print(f"Found match: {inst.get('SYMBOL_NAME')} / {inst.get('DISPLAY_NAME')} / {inst.get('UNDERLYING_SYMBOL')} (Security ID: {security_id})")
-
-                return {
+            return {
+                "priority": match_priority,
+                "field": match_field,
+                "instrument": {
                     "security_id": int(security_id) if security_id else None,
-                    "exchange_segment": exchange_segment,
+                    "exchange_segment": final_exchange_segment,
                     "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
                     "trading_symbol": inst.get("TRADING_SYMBOL", ""),
                     "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
@@ -267,6 +269,35 @@ async def find_instrument_by_segment(
                     "exchange": exchange,
                     "segment": segment
                 }
+            }
+
+        # PASS 1: Search for EXACT matches only (priority 1-3)
+        exact_matches = []
+        for inst in instruments:
+            match_info = process_instrument(inst, collect_contains=False)
+            if match_info and match_info["priority"] <= 3:  # Only exact matches
+                exact_matches.append(match_info)
+
+        # If we found exact matches, return the best one immediately
+        if exact_matches:
+            exact_matches.sort(key=lambda x: x["priority"])
+            best_match = exact_matches[0]["instrument"]
+            print(f"Selected best EXACT match: {best_match.get('symbol_name')} / {best_match.get('display_name')} / {best_match.get('underlying_symbol')} (Priority: {exact_matches[0]['priority']}, Security ID: {best_match.get('security_id')}, Exchange Segment: {best_match.get('exchange_segment')})")
+            return best_match
+
+        # PASS 2: Only if no exact matches, search for CONTAINS matches (priority 4-7)
+        if not exact_match:
+            contains_matches = []
+            for inst in instruments:
+                match_info = process_instrument(inst, collect_contains=True)
+                if match_info and match_info["priority"] >= 4:  # Only contains matches
+                    contains_matches.append(match_info)
+
+            if contains_matches:
+                contains_matches.sort(key=lambda x: x["priority"])
+                best_match = contains_matches[0]["instrument"]
+                print(f"Selected best CONTAINS match: {best_match.get('symbol_name')} / {best_match.get('display_name')} / {best_match.get('underlying_symbol')} (Priority: {contains_matches[0]['priority']}, Security ID: {best_match.get('security_id')}, Exchange Segment: {best_match.get('exchange_segment')})")
+                return best_match
 
         print(f"No match found for '{search_symbol}' in segment {exchange_segment}")
         return None
@@ -409,134 +440,13 @@ async def search_instruments(
             "error": f"Error searching instruments: {error_detail}"
         }
 
-        # Normalize common index queries and detect if it's an index query
-        is_index_query = False
-        if query_upper in ["NIFTY", "NIFTY 50", "NIFTY50"]:
-            query_upper = "NIFTY 50"
-            is_index_query = True
-        elif query_upper in ["BANK NIFTY", "NIFTY BANK", "BANKNIFTY"]:
-            query_upper = "BANK NIFTY"
-            is_index_query = True
-        elif query_upper in ["SENSEX", "BSE SENSEX"]:
-            is_index_query = True
-
-        # Check if this looks like an index query (NIFTY, SENSEX, etc.)
-        # Auto-detect common indices even if instrument_type is not specified
+        # Normalize query and detect if it's an index query
+        query_upper = query.upper().strip() if not case_sensitive else query.strip()
         is_index_query = (
-            is_index_query or
             (instrument_type and instrument_type.upper() == "INDEX") or
             "NIFTY" in query_upper or
             "SENSEX" in query_upper
-        ) or "NIFTY" in query_upper
-
-        # For indices like NIFTY, SENSEX, try to get from IDX_I segment directly first
-        if is_index_query:
-            try:
-                # Try to get instruments from IDX_I segment using API
-                segment_result = await trading_service.get_instrument_list_segmentwise("IDX_I")
-                if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
-                    idx_instruments = segment_result["data"]["instruments"]
-                    matched_instrument = None
-
-                    # Search in IDX_I instruments - filter by underlying_symbol in CAPS
-                    for inst in idx_instruments:
-                        # Get underlying_symbol in uppercase - this is the key identifier
-                        underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("UNDERLYING") or "").upper().strip()
-
-                        # Also get other fields for fallback
-                        symbol_name = (inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME") or "").upper()
-                        trading_symbol = (inst.get("TRADING_SYMBOL") or "").upper()
-                        display_name = (inst.get("DISPLAY_NAME") or "").upper()
-
-                        # PRIMARY MATCH: Use underlying_symbol in CAPS to identify the instrument
-                        # This is the correct way to identify instruments from the exchange_segment list
-                        matches = False
-                        if underlying_symbol:
-                            # For NIFTY queries, check if underlying_symbol (in CAPS) matches
-                            if query_upper == "NIFTY 50" or query_upper == "NIFTY":
-                                # Match if underlying_symbol contains "NIFTY" (e.g., "NIFTY", "NIFTY 50")
-                                matches = underlying_symbol == "NIFTY" or "NIFTY" in underlying_symbol
-                            elif query_upper == "BANK NIFTY":
-                                # Match if underlying_symbol contains both "BANK" and "NIFTY"
-                                matches = "BANK" in underlying_symbol and "NIFTY" in underlying_symbol
-                            else:
-                                # Exact match or contains match on underlying_symbol
-                                matches = underlying_symbol == query_upper or query_upper in underlying_symbol
-
-                        # FALLBACK: If underlying_symbol doesn't match, check other fields
-                        if not matches:
-                            if query_upper == "NIFTY 50" or query_upper == "NIFTY":
-                                # For NIFTY, match if it contains "NIFTY" and "50" or just "NIFTY 50"
-                                matches = ("NIFTY" in symbol_name and "50" in symbol_name) or "NIFTY 50" in symbol_name or "NIFTY 50" in display_name
-                            elif query_upper == "BANK NIFTY":
-                                matches = "BANK" in symbol_name and "NIFTY" in symbol_name
-                            else:
-                                matches = (
-                                    query_upper in symbol_name or symbol_name == query_upper or
-                                    query_upper in trading_symbol or trading_symbol == query_upper or
-                                    query_upper in display_name or display_name == query_upper
-                                )
-
-                        if matches:
-                            security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
-                            exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
-                            if security_id:
-                                matched_instrument = {
-                                    "security_id": int(security_id),
-                                    "exchange_segment": "IDX_I",
-                                    "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
-                                    "trading_symbol": inst.get("TRADING_SYMBOL", ""),
-                                    "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
-                                    "instrument_type": "INDEX",
-                                    "exchange": exchange,
-                                    "segment": "I"
-                                }
-                                break  # Found a match, exit loop
-
-                    # If we found a match, return it
-                    if matched_instrument:
-                        return {
-                            "success": True,
-                            "data": {
-                                "instruments": [matched_instrument],
-                                "count": 1,
-                                "query": query
-                            }
-                        }
-
-                    # No match found - return sample instruments for debugging
-                    sample_instruments = []
-                    for inst in idx_instruments[:20]:  # Show first 20 instruments
-                        underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("UNDERLYING") or "").upper().strip()
-                        symbol_name = inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME") or ""
-                        security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or ""
-                        sample_instruments.append({
-                            "underlying_symbol": underlying_symbol,
-                            "symbol_name": symbol_name,
-                            "security_id": security_id,
-                            "display_name": inst.get("DISPLAY_NAME", ""),
-                            "trading_symbol": inst.get("TRADING_SYMBOL", "")
-                        })
-
-                    return {
-                        "success": False,
-                        "error": f"No instruments found matching '{query}'. Found {len(idx_instruments)} total instruments in IDX_I segment.",
-                        "data": {
-                            "query": query,
-                            "total_instruments": len(idx_instruments),
-                            "sample_instruments": sample_instruments,
-                            "hint": "Check the sample_instruments above to see available instruments. Look for matching underlying_symbol or symbol_name."
-                        }
-                    }
-                elif not segment_result.get("success"):
-                    # Log the error but continue to database search
-                    error_msg = segment_result.get("error", "Unknown error")
-                    print(f"Warning: Failed to fetch IDX_I instruments from API: {error_msg}")
-            except Exception as e:
-                # Log the error but continue to database search
-                print(f"Warning: Exception while fetching IDX_I instruments: {str(e)}")
-                import traceback
-                print(traceback.format_exc())
+        )
 
         # Get all instruments from database
         try:
@@ -567,9 +477,9 @@ async def search_instruments(
                 print(f"Error fetching instruments from CSV: {str(csv_error)}")
                 instruments = []
 
-        # Filter instruments
-        results = []
-        for inst in instruments:
+        # Two-pass approach: First pass for exact matches, second pass for contains matches
+        def process_db_instrument(inst, collect_contains=False):
+            """Process a single database instrument and return match info if found"""
             # Check various fields
             symbol_name = (inst.get("SYMBOL_NAME") or inst.get("SEM_SYMBOL_NAME") or inst.get("SM_SYMBOL_NAME") or "").upper()
             trading_symbol = (inst.get("SEM_TRADING_SYMBOL") or inst.get("TRADING_SYMBOL") or "").upper()
@@ -581,67 +491,60 @@ async def search_instruments(
             segment = (inst.get("SEM_SEGMENT") or inst.get("SEGMENT") or "").upper()
             exchange = (inst.get("SEM_EXM_EXCH_ID") or inst.get("EXCH_ID") or inst.get("EXCHANGE_ID") or "").upper()
 
-            # For index queries, prioritize matching on underlying_symbol (in CAPS) and segment
+            # For index queries, must have segment "I"
             if is_index_query:
-                # For indices, must have segment "I" and underlying_symbol (in CAPS) should match
                 if segment != "I":
-                    # Not an index segment, skip for index queries
-                    continue
+                    return None
 
-                # PRIMARY MATCH: Check if underlying_symbol (in CAPS) matches
-                # This is the key identifier for instruments from exchange_segment list
-                matches = False
-                if underlying_symbol:
-                    # For NIFTY queries, check if underlying_symbol (in CAPS) contains "NIFTY"
-                    if query_upper == "NIFTY 50" or query_upper == "NIFTY":
-                        # Match if underlying_symbol (in CAPS) equals "NIFTY" or contains "NIFTY"
-                        matches = underlying_symbol == "NIFTY" or "NIFTY" in underlying_symbol
-                    elif query_upper == "BANK NIFTY":
-                        matches = "BANK" in underlying_symbol and "NIFTY" in underlying_symbol
-                    else:
-                        # Exact match or contains match on underlying_symbol (in CAPS)
-                        matches = underlying_symbol == query_upper or query_upper in underlying_symbol
+            match_priority = None
 
-                # FALLBACK: Also check other fields if underlying_symbol doesn't match
-                if not matches:
-                    matches = (
-                        query_upper in symbol_name or
-                        query_upper in trading_symbol or
-                        query_upper in display_name
-                    )
+            # Try EXACT matches first
+            if underlying_symbol:
+                underlying_symbol_clean = underlying_symbol.strip()
+                if underlying_symbol_clean == query_upper:
+                    match_priority = 1
+            elif symbol_name:
+                symbol_name_clean = symbol_name.strip()
+                if symbol_name_clean == query_upper:
+                    match_priority = 2
+            elif display_name:
+                display_name_clean = display_name.strip()
+                if display_name_clean == query_upper:
+                    match_priority = 3
+            # Only check contains matches if collect_contains is True
+            elif collect_contains and not exact_match:
+                if underlying_symbol and query_upper in underlying_symbol:
+                    match_priority = 4
+                elif symbol_name and query_upper in symbol_name:
+                    match_priority = 5
+                elif display_name and query_upper in display_name:
+                    match_priority = 6
+                elif trading_symbol and query_upper in trading_symbol:
+                    match_priority = 7
+                elif query_upper == security_id:
+                    match_priority = 8
 
-                if not matches:
-                    continue
-            else:
-                # For non-index queries, check all fields
-                matches = (
-                    query_upper in symbol_name or
-                    query_upper in trading_symbol or
-                    query_upper in display_name or
-                    query_upper in underlying_symbol or
-                    query_upper == security_id
-                )
-                if not matches:
-                    continue
+            if match_priority is None:
+                return None
 
             # Apply filters if provided
             if exchange_segment:
                 # Handle IDX_I specially
                 if exchange_segment == "IDX_I":
                     if segment != "I":
-                        continue
+                        return None
                 else:
                     expected_exchange = exchange_segment.split("_")[0]
                     expected_segment = exchange_segment.split("_")[1] if "_" in exchange_segment else ""
                     segment_map = {"EQ": "E", "FNO": "D", "FO": "D", "IDX": "I", "COM": "M"}
                     expected_segment_code = segment_map.get(expected_segment, expected_segment)
                     if exchange.upper() != expected_exchange.upper() or (expected_segment_code and segment != expected_segment_code):
-                        continue
+                        return None
 
             if instrument_type:
                 inst_type = (inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "").upper()
                 if inst_type != instrument_type.upper():
-                    continue
+                    return None
 
             # Extract relevant information
             security_id_val = inst.get("SEM_SECURITY_ID") or inst.get("SECURITY_ID") or inst.get("SM_SECURITY_ID")
@@ -654,7 +557,6 @@ async def search_instruments(
             exchange_upper = exchange_val.upper()
 
             if segment_upper == "I" or segment_upper == "INDEX":
-                # Indices use IDX_I format regardless of exchange
                 exchange_segment_formatted = "IDX_I"
             elif exchange_upper == "NSE" and segment_upper == "E":
                 exchange_segment_formatted = "NSE_EQ"
@@ -669,19 +571,47 @@ async def search_instruments(
             elif exchange_upper == "NCDEX":
                 exchange_segment_formatted = "NCDEX_COM"
 
-            results.append({
-                "security_id": int(security_id_val) if security_id_val else None,
-                "exchange_segment": exchange_segment_formatted,
-                "symbol_name": inst.get("SYMBOL_NAME") or inst.get("SEM_SYMBOL_NAME") or "",
-                "trading_symbol": inst.get("SEM_TRADING_SYMBOL") or inst.get("TRADING_SYMBOL") or "",
-                "display_name": inst.get("DISPLAY_NAME") or inst.get("SEM_CUSTOM_SYMBOL") or "",
-                "instrument_type": inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "",
-                "exchange": exchange_val,
-                "segment": segment_val
-            })
+            return {
+                "priority": match_priority,
+                "result": {
+                    "security_id": int(security_id_val) if security_id_val else None,
+                    "exchange_segment": exchange_segment_formatted,
+                    "symbol_name": inst.get("SYMBOL_NAME") or inst.get("SEM_SYMBOL_NAME") or "",
+                    "trading_symbol": inst.get("SEM_TRADING_SYMBOL") or inst.get("TRADING_SYMBOL") or "",
+                    "display_name": inst.get("DISPLAY_NAME") or inst.get("SEM_CUSTOM_SYMBOL") or "",
+                    "instrument_type": inst.get("INSTRUMENT") or inst.get("INSTRUMENT_TYPE") or "",
+                    "exchange": exchange_val,
+                    "segment": segment_val
+                }
+            }
 
-            if len(results) >= limit:
-                break
+        # PASS 1: Search for EXACT matches only (priority 1-3)
+        exact_results = []
+        for inst in instruments:
+            match_info = process_db_instrument(inst, collect_contains=False)
+            if match_info and match_info["priority"] <= 3:
+                exact_results.append(match_info)
+
+        # If we found exact matches, use them (sorted and limited)
+        if exact_results:
+            exact_results.sort(key=lambda x: x["priority"])
+            results = [item["result"] for item in exact_results[:limit]]
+        else:
+            # PASS 2: Only if no exact matches, search for CONTAINS matches (priority 4-8)
+            if not exact_match:
+                contains_results = []
+                for inst in instruments:
+                    match_info = process_db_instrument(inst, collect_contains=True)
+                    if match_info and match_info["priority"] >= 4:
+                        contains_results.append(match_info)
+
+                if contains_results:
+                    contains_results.sort(key=lambda x: x["priority"])
+                    results = [item["result"] for item in contains_results[:limit]]
+                else:
+                    results = []
+            else:
+                results = []
 
         if not results:
             # If no results found, try to fetch and show sample instruments from API
