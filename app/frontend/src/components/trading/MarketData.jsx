@@ -54,9 +54,10 @@ function MarketData({ accessToken }) {
         NSE_FNO: "NSE_FNO",
         BSE_FNO: "BSE_FNO",
         MCX_COM: "MCX_COM",
+        IDX_I: "IDX_I", // Indices
       };
       const exchangeSegment =
-        exchangeSegmentMap[instrument.exchangeSegment] || "NSE_EQ";
+        exchangeSegmentMap[instrument.exchangeSegment] || instrument.exchangeSegment || "NSE_EQ";
 
       const response = await api.getMarketQuote({
         access_token: accessToken,

@@ -10,7 +10,12 @@ function InstrumentSearch({
 }) {
   const [instruments, setInstruments] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filteredInstruments, setFilteredInstruments] = useState([]);
+  const [filteredInstruments, setFilteredInstruments] = useState({
+    indices: [],
+    equity: [],
+    options: [],
+    other: []
+  });
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -30,10 +35,47 @@ function InstrumentSearch({
     loadInstruments();
   }, [accessToken, exchangeSegment]);
 
+  // Categorize instrument by type
+  const categorizeInstrument = (instrument) => {
+    const segment = instrument.SEM_SEGMENT || instrument.SEGMENT || "";
+    const instrumentType = (instrument.INSTRUMENT || instrument.INSTRUMENT_TYPE || "").toUpperCase();
+    const exchangeSegment = instrument.SEM_EXM_EXCH_ID || instrument.EXCH_ID || "";
+
+    // Check for indices
+    if (
+      segment === "I" ||
+      instrumentType === "INDEX" ||
+      exchangeSegment === "IDX_I"
+    ) {
+      return "indices";
+    }
+
+    // Check for options (F&O segment with OPT in instrument type or name)
+    if (segment === "D") {
+      const symbolName = (instrument.SYMBOL_NAME || instrument.SEM_SYMBOL_NAME || "").toUpperCase();
+      if (instrumentType.includes("OPT") || symbolName.includes("OPT")) {
+        return "options";
+      }
+    }
+
+    // Check for equity/stocks (segment E)
+    if (segment === "E") {
+      return "equity";
+    }
+
+    // Default to equity if segment is E, otherwise unknown
+    return segment === "E" ? "equity" : "other";
+  };
+
   // Filter instruments based on search query - optimized with debouncing
   useEffect(() => {
     if (searchQuery.trim().length < 2) {
-      setFilteredInstruments([]);
+      setFilteredInstruments({
+        indices: [],
+        equity: [],
+        options: [],
+        other: []
+      });
       setShowSuggestions(false);
       return;
     }
@@ -43,7 +85,12 @@ function InstrumentSearch({
       const query = searchQuery.toLowerCase().trim();
 
       if (query.length < 2) {
-        setFilteredInstruments([]);
+        setFilteredInstruments({
+          indices: [],
+          equity: [],
+          options: [],
+          other: []
+        });
         setShowSuggestions(false);
         return;
       }
@@ -85,11 +132,36 @@ function InstrumentSearch({
             securityId.includes(query) ||
             isin.includes(query)
           );
-        })
-        .slice(0, 10); // Limit to 10 results
+        });
 
-      setFilteredInstruments(filtered);
-      setShowSuggestions(filtered.length > 0);
+      // Group by category
+      const grouped = {
+        indices: [],
+        equity: [],
+        options: [],
+        other: []
+      };
+
+      filtered.forEach((inst) => {
+        const category = categorizeInstrument(inst);
+        grouped[category].push(inst);
+      });
+
+      // Limit each category to prevent too many results
+      const maxPerCategory = 10;
+      grouped.indices = grouped.indices.slice(0, maxPerCategory);
+      grouped.equity = grouped.equity.slice(0, maxPerCategory);
+      grouped.options = grouped.options.slice(0, maxPerCategory);
+      grouped.other = grouped.other.slice(0, maxPerCategory);
+
+      // Store grouped results
+      setFilteredInstruments(grouped);
+      setShowSuggestions(
+        grouped.indices.length > 0 ||
+        grouped.equity.length > 0 ||
+        grouped.options.length > 0 ||
+        grouped.other.length > 0
+      );
     }, 200); // 200ms debounce
 
     return () => clearTimeout(timeoutId);
@@ -265,7 +337,13 @@ function InstrumentSearch({
     const exchange = (exchangeSegment || "").toString().toUpperCase();
     const seg = (segment || "").toString().toUpperCase();
 
-    if (exchange === "NSE" && seg === "E") {
+    // Check instrument type for indices
+    const instrumentType = (instrument.INSTRUMENT || instrument.INSTRUMENT_TYPE || "").toUpperCase();
+
+    // Handle indices first - segment "I" or "INDEX", or instrument type "INDEX" should use IDX_I
+    if (seg === "I" || seg === "INDEX" || instrumentType === "INDEX") {
+      exchangeSegmentFormatted = "IDX_I";
+    } else if (exchange === "NSE" && seg === "E") {
       exchangeSegmentFormatted = "NSE_EQ";
     } else if (exchange === "BSE" && seg === "E") {
       exchangeSegmentFormatted = "BSE_EQ";
@@ -349,6 +427,80 @@ function InstrumentSearch({
     return exchange;
   };
 
+  // Render a single instrument item
+  const renderInstrument = (instrument, idx) => {
+    const securityId =
+      instrument.SEM_SECURITY_ID ||
+      instrument.SECURITY_ID ||
+      instrument.SM_SECURITY_ID ||
+      instrument.SEC_ID ||
+      instrument.securityId ||
+      "N/A";
+    const symbolName =
+      instrument.SYMBOL_NAME ||
+      instrument.SEM_SYMBOL_NAME ||
+      instrument.SM_SYMBOL_NAME ||
+      "";
+    const tradingSymbol =
+      instrument.SEM_TRADING_SYMBOL || instrument.TRADING_SYMBOL || "";
+    const displayName =
+      instrument.DISPLAY_NAME ||
+      instrument.SEM_CUSTOM_SYMBOL ||
+      symbolName;
+    const hasValidId =
+      securityId &&
+      securityId !== "N/A" &&
+      securityId !== "undefined" &&
+      securityId !== "null";
+
+    return (
+      <button
+        key={`${securityId}-${idx}`}
+        onClick={() => handleSelect(instrument)}
+        disabled={!hasValidId}
+        className={`w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800/50 last:border-b-0 transition-colors ${
+          !hasValidId ? "opacity-50 cursor-not-allowed" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex-1 min-w-0">
+            <div className="text-white font-medium truncate">
+              {displayName || symbolName || tradingSymbol}
+            </div>
+            <div className="text-sm text-zinc-400 mt-1">
+              {tradingSymbol && tradingSymbol !== symbolName && (
+                <span className="mr-2">{tradingSymbol}</span>
+              )}
+              <span
+                className={
+                  hasValidId ? "text-zinc-500" : "text-red-400"
+                }
+              >
+                ID: {securityId} |{" "}
+                {getExchangeSegmentDisplay(instrument)}
+                {!hasValidId && " (Invalid - Missing Security ID)"}
+              </span>
+            </div>
+          </div>
+        </div>
+      </button>
+    );
+  };
+
+  // Render a section with title and instruments
+  const renderSection = (title, instruments, category) => {
+    if (!instruments || instruments.length === 0) return null;
+
+    return (
+      <div key={category} className="border-b border-zinc-800/50 last:border-b-0">
+        <div className="px-4 py-2 bg-zinc-800/30 text-zinc-300 text-xs font-semibold uppercase tracking-wider">
+          {title}
+        </div>
+        {instruments.map((instrument, idx) => renderInstrument(instrument, idx))}
+      </div>
+    );
+  };
+
   return (
     <div className="relative w-full z-50">
       <div className="relative" ref={searchRef}>
@@ -360,7 +512,12 @@ function InstrumentSearch({
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onFocus={() => {
-            if (filteredInstruments.length > 0) {
+            if (
+              (filteredInstruments.indices && filteredInstruments.indices.length > 0) ||
+              (filteredInstruments.equity && filteredInstruments.equity.length > 0) ||
+              (filteredInstruments.options && filteredInstruments.options.length > 0) ||
+              (filteredInstruments.other && filteredInstruments.other.length > 0)
+            ) {
               setShowSuggestions(true);
             }
           }}
@@ -380,76 +537,30 @@ function InstrumentSearch({
 
       {error && <div className="mt-2 text-sm text-red-400">{error}</div>}
 
-      {showSuggestions && filteredInstruments.length > 0 && (
+      {showSuggestions &&
+       (filteredInstruments.indices?.length > 0 ||
+        filteredInstruments.equity?.length > 0 ||
+        filteredInstruments.options?.length > 0 ||
+        filteredInstruments.other?.length > 0) && (
         <div
           ref={suggestionsRef}
           className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl max-h-80 overflow-y-auto"
           style={{ zIndex: 1001 }}
         >
-          {filteredInstruments.map((instrument, idx) => {
-            const securityId =
-              instrument.SEM_SECURITY_ID ||
-              instrument.SECURITY_ID ||
-              instrument.SM_SECURITY_ID ||
-              instrument.SEC_ID ||
-              instrument.securityId ||
-              "N/A";
-            const symbolName =
-              instrument.SYMBOL_NAME ||
-              instrument.SEM_SYMBOL_NAME ||
-              instrument.SM_SYMBOL_NAME ||
-              "";
-            const tradingSymbol =
-              instrument.SEM_TRADING_SYMBOL || instrument.TRADING_SYMBOL || "";
-            const displayName =
-              instrument.DISPLAY_NAME ||
-              instrument.SEM_CUSTOM_SYMBOL ||
-              symbolName;
-            const hasValidId =
-              securityId &&
-              securityId !== "N/A" &&
-              securityId !== "undefined" &&
-              securityId !== "null";
-
-            return (
-              <button
-                key={idx}
-                onClick={() => handleSelect(instrument)}
-                disabled={!hasValidId}
-                className={`w-full text-left px-4 py-3 hover:bg-zinc-800 border-b border-zinc-800/50 last:border-b-0 transition-colors ${
-                  !hasValidId ? "opacity-50 cursor-not-allowed" : ""
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-white font-medium truncate">
-                      {displayName || symbolName || tradingSymbol}
-                    </div>
-                    <div className="text-sm text-zinc-400 mt-1">
-                      {tradingSymbol && tradingSymbol !== symbolName && (
-                        <span className="mr-2">{tradingSymbol}</span>
-                      )}
-                      <span
-                        className={
-                          hasValidId ? "text-zinc-500" : "text-red-400"
-                        }
-                      >
-                        ID: {securityId} |{" "}
-                        {getExchangeSegmentDisplay(instrument)}
-                        {!hasValidId && " (Invalid - Missing Security ID)"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
+          {renderSection("Indices", filteredInstruments.indices, "indices")}
+          {renderSection("Stocks / Equity", filteredInstruments.equity, "equity")}
+          {renderSection("Options", filteredInstruments.options, "options")}
+          {filteredInstruments.other && filteredInstruments.other.length > 0 &&
+           renderSection("Other", filteredInstruments.other, "other")}
         </div>
       )}
 
       {showSuggestions &&
         searchQuery.length >= 2 &&
-        filteredInstruments.length === 0 && (
+        (!filteredInstruments.indices || filteredInstruments.indices.length === 0) &&
+        (!filteredInstruments.equity || filteredInstruments.equity.length === 0) &&
+        (!filteredInstruments.options || filteredInstruments.options.length === 0) &&
+        (!filteredInstruments.other || filteredInstruments.other.length === 0) && (
           <div
             className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-4 text-center text-zinc-400 text-sm"
             style={{ zIndex: 1001 }}
