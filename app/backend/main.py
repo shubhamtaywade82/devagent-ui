@@ -673,7 +673,7 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                 # Check all user messages for trading-related keywords
                 user_messages = [msg.get("content", "").lower() for msg in messages if msg.get("role") == "user"]
                 combined_user_content = " ".join(user_messages)
-                
+
                 trading_keywords = [
                     "price", "quote", "position", "positions", "holding", "holdings",
                     "p&l", "pnl", "profit", "loss", "portfolio", "balance", "fund",
@@ -681,7 +681,7 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                     "nifty", "hdfc", "reliance", "tcs", "infy", "sensex", "bank nifty",
                     "current", "what are", "show me", "get my", "fetch", "search"
                 ]
-                
+
                 if access_token and any(keyword in combined_user_content for keyword in trading_keywords):
                     # Force tool usage for trading-related queries
                     payload["tool_choice"] = "required"
@@ -730,8 +730,18 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                                     formatted_result = json.dumps(data, indent=2)
                                 content = f"Tool executed successfully. Result:\n{formatted_result}"
                             else:
-                                # Format error
+                                # Format error - include sample instruments if available
                                 error_msg = result.get("error", "Unknown error")
+                                error_data = result.get("data", {})
+                                sample_instruments = error_data.get("sample_instruments")
+
+                                if sample_instruments:
+                                    # Add sample instruments to error message
+                                    sample_text = "\n\nAvailable instruments from API:\n"
+                                    for inst in sample_instruments[:10]:
+                                        sample_text += f"  - {inst.get('symbol_name', 'N/A')} (underlying_symbol: {inst.get('underlying_symbol', 'N/A')}, security_id: {inst.get('security_id', 'N/A')})\n"
+                                    error_msg += sample_text
+
                                 content = f"Tool execution failed: {error_msg}"
                         else:
                             content = json.dumps(result, indent=2)
@@ -760,13 +770,38 @@ async def generate_openai_response(prompt: str, tools=None, messages=None, acces
                         return {"response": data["choices"][0]["message"]["content"]}
 
                 # If no tool calls but tools were available and this is a trading query,
-                # the model might have ignored tools - try fallback extraction
+                # the model might have ignored tools - try fallback extraction or force tool usage
                 content = message.get("content", "")
                 if tools and access_token:
                     # Check if model showed code instead of calling tools
                     import re
 
-                    # Try to extract get_market_quote call
+                    # Check for common trading queries that should use tools
+                    user_message = messages[-1].get("content", "").lower() if messages else ""
+
+                    # If user asked about positions and no tool was called, force get_positions
+                    if ("position" in user_message or "positions" in user_message) and "tool_calls" not in message:
+                        print("Detected positions query but no tool call - forcing get_positions")
+                        result = await execute_tool("get_positions", {}, access_token)
+                        if result.get("success"):
+                            formatted = format_positions_result(result.get("data", {}))
+                            return {"response": f"Here are your current positions:\n\n{formatted}"}
+                        else:
+                            error_msg = result.get("error", "Unknown error")
+                            return {"response": f"Failed to fetch positions: {error_msg}"}
+
+                    # If user asked about holdings and no tool was called, force get_holdings
+                    if ("holding" in user_message or "holdings" in user_message) and "tool_calls" not in message:
+                        print("Detected holdings query but no tool call - forcing get_holdings")
+                        result = await execute_tool("get_holdings", {}, access_token)
+                        if result.get("success"):
+                            formatted = format_holdings_result(result.get("data", {}))
+                            return {"response": f"Here are your current holdings:\n\n{formatted}"}
+                        else:
+                            error_msg = result.get("error", "Unknown error")
+                            return {"response": f"Failed to fetch holdings: {error_msg}"}
+
+                    # Try to extract get_market_quote call from code
                     match = re.search(r'get_market_quote\s*\(\s*({[^}]+})\s*\)', content, re.IGNORECASE)
                     if match:
                         try:

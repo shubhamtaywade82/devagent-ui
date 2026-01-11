@@ -183,6 +183,8 @@ async def search_instruments(
                 segment_result = await trading_service.get_instrument_list_segmentwise("IDX_I")
                 if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
                     idx_instruments = segment_result["data"]["instruments"]
+                    matched_instrument = None
+
                     # Search in IDX_I instruments - filter by underlying_symbol in CAPS
                     for inst in idx_instruments:
                         # Get underlying_symbol in uppercase - this is the key identifier
@@ -226,23 +228,53 @@ async def search_instruments(
                             security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or inst.get("SM_SECURITY_ID")
                             exchange = inst.get("EXCH_ID") or inst.get("SEM_EXM_EXCH_ID") or "NSE"
                             if security_id:
-                                return {
-                                    "success": True,
-                                    "data": {
-                                        "instruments": [{
-                                            "security_id": int(security_id),
-                                            "exchange_segment": "IDX_I",
-                                            "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
-                                            "trading_symbol": inst.get("TRADING_SYMBOL", ""),
-                                            "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
-                                            "instrument_type": "INDEX",
-                                            "exchange": exchange,
-                                            "segment": "I"
-                                        }],
-                                        "count": 1,
-                                        "query": query
-                                    }
+                                matched_instrument = {
+                                    "security_id": int(security_id),
+                                    "exchange_segment": "IDX_I",
+                                    "symbol_name": inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME", ""),
+                                    "trading_symbol": inst.get("TRADING_SYMBOL", ""),
+                                    "display_name": inst.get("DISPLAY_NAME") or inst.get("SYMBOL_NAME", ""),
+                                    "instrument_type": "INDEX",
+                                    "exchange": exchange,
+                                    "segment": "I"
                                 }
+                                break  # Found a match, exit loop
+
+                    # If we found a match, return it
+                    if matched_instrument:
+                        return {
+                            "success": True,
+                            "data": {
+                                "instruments": [matched_instrument],
+                                "count": 1,
+                                "query": query
+                            }
+                        }
+
+                    # No match found - return sample instruments for debugging
+                    sample_instruments = []
+                    for inst in idx_instruments[:20]:  # Show first 20 instruments
+                        underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("UNDERLYING") or "").upper().strip()
+                        symbol_name = inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME") or ""
+                        security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or ""
+                        sample_instruments.append({
+                            "underlying_symbol": underlying_symbol,
+                            "symbol_name": symbol_name,
+                            "security_id": security_id,
+                            "display_name": inst.get("DISPLAY_NAME", ""),
+                            "trading_symbol": inst.get("TRADING_SYMBOL", "")
+                        })
+
+                    return {
+                        "success": False,
+                        "error": f"No instruments found matching '{query}'. Found {len(idx_instruments)} total instruments in IDX_I segment.",
+                        "data": {
+                            "query": query,
+                            "total_instruments": len(idx_instruments),
+                            "sample_instruments": sample_instruments,
+                            "hint": "Check the sample_instruments above to see available instruments. Look for matching underlying_symbol or symbol_name."
+                        }
+                    }
                 elif not segment_result.get("success"):
                     # Log the error but continue to database search
                     error_msg = segment_result.get("error", "Unknown error")
@@ -399,10 +431,46 @@ async def search_instruments(
                 break
 
         if not results:
-            # If no results found, provide helpful error message
+            # If no results found, try to fetch and show sample instruments from API
+            sample_instruments = []
+            sample_info = ""
+
+            # For index queries, fetch IDX_I instruments to show samples
+            if is_index_query:
+                try:
+                    segment_result = await trading_service.get_instrument_list_segmentwise("IDX_I")
+                    if segment_result.get("success") and segment_result.get("data", {}).get("instruments"):
+                        idx_instruments = segment_result["data"]["instruments"]
+                        # Show first 20 instruments as samples
+                        for inst in idx_instruments[:20]:
+                            underlying_symbol = (inst.get("UNDERLYING_SYMBOL") or inst.get("UNDERLYING") or "").upper().strip()
+                            symbol_name = inst.get("SYMBOL_NAME") or inst.get("DISPLAY_NAME") or ""
+                            security_id = inst.get("SECURITY_ID") or inst.get("SEM_SECURITY_ID") or ""
+                            sample_instruments.append({
+                                "underlying_symbol": underlying_symbol,
+                                "symbol_name": symbol_name,
+                                "security_id": security_id,
+                                "display_name": inst.get("DISPLAY_NAME", ""),
+                                "trading_symbol": inst.get("TRADING_SYMBOL", "")
+                            })
+                        sample_info = f"\n\nFound {len(idx_instruments)} total instruments in IDX_I segment. Sample instruments:\n" + "\n".join([
+                            f"  - {inst['symbol_name']} (underlying_symbol: {inst['underlying_symbol']}, security_id: {inst['security_id']})"
+                            for inst in sample_instruments[:10]
+                        ])
+                except Exception as e:
+                    print(f"Error fetching sample instruments: {str(e)}")
+
+            # If no results found, provide helpful error message with samples
+            error_msg = f"No instruments found matching '{query}'. Please check the spelling or try a different search term. For indices like NIFTY, ensure you're searching with the correct name.{sample_info}"
+
             return {
                 "success": False,
-                "error": f"No instruments found matching '{query}'. Please check the spelling or try a different search term. For indices like NIFTY, ensure you're searching with the correct name."
+                "error": error_msg,
+                "data": {
+                    "query": query,
+                    "sample_instruments": sample_instruments[:10] if sample_instruments else None,
+                    "hint": "Check the sample_instruments above to see available instruments. Look for matching underlying_symbol or symbol_name."
+                } if sample_instruments else None
             }
 
         return {
