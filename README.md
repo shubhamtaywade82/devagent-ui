@@ -1,16 +1,24 @@
-# DevAgent - AI-Powered Development Editor
+# DevAgent - AI-Powered Development & Trading Platform
 
-A web-based development editor inspired by Cursor AI, featuring AI-powered code assistance, UI component generation, and design system suggestions.
+A comprehensive web-based platform combining AI-powered code development with algorithmic trading capabilities. Features code editing, AI assistance, UI component generation, and full trading integration with DhanHQ.
 
 ## Features
 
 ### 🎯 Core Capabilities
-- **AI Code Assistant**: Get intelligent code suggestions powered by Ollama (Llama 3.2)
+- **AI Code Assistant**: Get intelligent code suggestions powered by Ollama (Llama 3.2) or OpenAI-compatible APIs
 - **Smart Code Editor**: Multi-file editing with Monaco Editor and syntax highlighting
 - **UI Component Generator**: Generate React components from text descriptions
 - **Design System Generator**: Create complete design systems with AI
 - **File Management**: Full file tree navigation with create/delete operations
 - **Real-time Chat**: Interactive AI assistant sidebar for code help
+
+### 📈 Trading Features
+- **Order Management**: Place, modify, cancel orders for Equity and F&O
+- **Portfolio Dashboard**: Real-time view of positions, holdings, and P&L
+- **Market Data**: Live quotes, option chains, historical data
+- **Fund Management**: Track balance, margin, and fund limits
+- **AI Trading Assistant**: Get trading strategies and market analysis
+- **DhanHQ Integration**: Full integration with Dhan trading platform
 
 ### 🎨 User Interface
 - **Dark Theme**: Professional cyber-physical aesthetic with violet/blue accents
@@ -23,15 +31,18 @@ A web-based development editor inspired by Cursor AI, featuring AI-powered code 
 - **Frontend**: React, Tailwind CSS, Monaco Editor, Framer Motion
 - **Backend**: FastAPI, Python 3.11
 - **Database**: MongoDB
-- **AI**: Ollama (Llama 3.2 model)
+- **AI**: Ollama (Llama 3.2) or OpenAI-compatible APIs (Ollama Router, vLLM, etc.)
+- **Trading**: DhanHQ Python SDK (v2.2.0)
 
 ## Getting Started
 
 ### Prerequisites
 - **Ollama** (default): Installed and running on `localhost:11434` with Llama 3.2 model: `ollama pull llama3.2`
 - **OR OpenAI-Compatible API**: Any service with `/v1/chat/completions` endpoint (e.g., Open WebUI, vLLM)
+- **DhanHQ Account**: For trading features, register at [Dhan Developer Portal](https://dhan.co) and get API credentials
 
-  See [AI_PROVIDERS.md](AI_PROVIDERS.md) for detailed configuration.
+  See [AI_PROVIDERS.md](AI_PROVIDERS.md) for AI configuration.
+  See [TRADING_GUIDE.md](TRADING_GUIDE.md) for trading setup.
 
 ### Installation
 
@@ -100,9 +111,11 @@ The application requires Ollama to be running locally at `localhost:11434` with 
 - **Backend**: Uses `MONGO_URL`, `DB_NAME` from `/app/backend/.env`
   - **AI Provider**: Configure `OLLAMA_BASE_URL`, `OLLAMA_MODEL` for Ollama
   - **OR**: Configure `OPENAI_API_BASE`, `OPENAI_API_MODEL`, `USE_OPENAI_API=true` for OpenAI-compatible APIs
+  - **Trading**: Configure `DHAN_CLIENT_ID`, `DHAN_APP_ID`, `DHAN_APP_SECRET` for DhanHQ
 - **Frontend**: Uses `VITE_BACKEND_URL` from `/app/frontend/.env`
 
-See [AI_PROVIDERS.md](AI_PROVIDERS.md) for AI provider configuration details.
+See [AI_PROVIDERS.md](AI_PROVIDERS.md) for AI provider configuration.
+See [TRADING_GUIDE.md](TRADING_GUIDE.md) for trading setup.
 
 ## Architecture
 

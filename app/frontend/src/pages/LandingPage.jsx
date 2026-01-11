@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Code2, Sparkles, FileCode, Zap } from 'lucide-react'
+import { Code2, Sparkles, FileCode, Zap, TrendingUp } from 'lucide-react'
 import api from '../services/api'
 
 function LandingPage() {
@@ -98,6 +98,22 @@ function LandingPage() {
             <p className="text-sm text-zinc-400">Monaco-powered editing</p>
           </motion.div>
         </div>
+
+        {/* Trading Button */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+          className="mb-6"
+        >
+          <button
+            onClick={() => navigate('/trading')}
+            className="w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-xl font-semibold transition-all flex items-center justify-center gap-3"
+          >
+            <TrendingUp className="w-5 h-5" />
+            <span>Go to Trading Dashboard</span>
+          </button>
+        </motion.div>
 
         {/* Create Project Form */}
         <motion.form
