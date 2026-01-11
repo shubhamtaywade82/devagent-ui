@@ -192,9 +192,43 @@ class TradingService:
         """Get market quote data"""
         try:
             dhan = self.get_dhan_instance(access_token)
-            quote = dhan.ohlc_data(securities=securities)
+
+            # Convert string security IDs to integers if needed (ohlc_data expects integers)
+            securities_int = {}
+            for exchange_seg, sec_ids in securities.items():
+                securities_int[exchange_seg] = [
+                    int(sec_id) if isinstance(sec_id, str) else sec_id
+                    for sec_id in sec_ids
+                ]
+
+            print(f"[get_market_quote] Calling ohlc_data with securities (original): {securities}")
+            print(f"[get_market_quote] Calling ohlc_data with securities (converted to int): {securities_int}")
+            quote = dhan.ohlc_data(securities=securities_int)
+
+            # Log the response structure for debugging
+            print(f"[get_market_quote] Response type: {type(quote)}")
+            if isinstance(quote, dict):
+                print(f"[get_market_quote] Response keys: {list(quote.keys())}")
+                # Log nested structure if present
+                if "data" in quote:
+                    print(f"[get_market_quote] data keys: {list(quote['data'].keys()) if isinstance(quote['data'], dict) else type(quote['data'])}")
+                    if isinstance(quote['data'], dict) and "data" in quote['data']:
+                        nested = quote['data']['data']
+                        if isinstance(nested, dict):
+                            print(f"[get_market_quote] nested data keys: {list(nested.keys())}")
+                            for key in nested.keys():
+                                if isinstance(nested[key], dict):
+                                    print(f"[get_market_quote]   {key} has {len(nested[key])} securities: {list(nested[key].keys())[:5]}")
+            elif isinstance(quote, list):
+                print(f"[get_market_quote] Response is list with {len(quote)} items")
+            else:
+                print(f"[get_market_quote] Response: {str(quote)[:500]}")
+
             return {"success": True, "data": quote}
         except Exception as e:
+            print(f"[get_market_quote] Exception: {str(e)}")
+            import traceback
+            print(f"[get_market_quote] Traceback: {traceback.format_exc()}")
             return {"success": False, "error": str(e)}
 
     def get_option_chain(self, access_token: str, under_security_id: int,

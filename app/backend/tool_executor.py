@@ -111,17 +111,32 @@ async def execute_tool(
         elif function_name == "get_market_quote":
             # Handle IDX_I format for indices - use IDX_I directly (DhanHQ API supports it)
             securities = function_args["securities"]
-            # Use securities as-is - DhanHQ API should handle IDX_I correctly
-            print(f"[get_market_quote] Calling with securities: {securities}")
 
+            # Convert security IDs to integers (ohlc_data expects integers, not strings)
+            securities_int = {}
+            for exchange_seg, sec_ids in securities.items():
+                securities_int[exchange_seg] = [
+                    int(sec_id) if isinstance(sec_id, (str, int, float)) else sec_id
+                    for sec_id in sec_ids
+                ]
+
+            print(f"[get_market_quote] Calling with securities (original): {securities}")
+            print(f"[get_market_quote] Calling with securities (converted to int): {securities_int}")
+
+            # ohlc_data expects integers, so use the converted version
             result = trading_service.get_market_quote(
                 access_token,
-                securities
+                securities_int
             )
 
             # Log the result for debugging
             if result.get("success"):
-                print(f"[get_market_quote] Success - data keys: {list(result.get('data', {}).keys()) if isinstance(result.get('data'), dict) else 'not a dict'}")
+                data = result.get("data", {})
+                print(f"[get_market_quote] Success - data type: {type(data)}")
+                if isinstance(data, dict):
+                    print(f"[get_market_quote] Data keys: {list(data.keys())}")
+                    if "data" in data and isinstance(data["data"], dict):
+                        print(f"[get_market_quote] data.data keys: {list(data['data'].keys())}")
             else:
                 print(f"[get_market_quote] Failed - error: {result.get('error')}")
 
