@@ -2,14 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { Activity, Wifi, WifiOff } from "lucide-react";
 import TradingWebSocket from "../../services/websocket";
 
-function RealTimeMarketFeed({ accessToken, securityId }) {
+function RealTimeMarketFeed({ accessToken, securityId, exchangeSegment = "NSE_EQ" }) {
   const [feedData, setFeedData] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState("");
   const wsRef = useRef(null);
 
   useEffect(() => {
-    if (!accessToken || !securityId) return;
+    if (!accessToken || !securityId || !exchangeSegment) return;
 
     // Create WebSocket connection
     const ws = new TradingWebSocket(
@@ -63,7 +63,7 @@ function RealTimeMarketFeed({ accessToken, securityId }) {
         wsRef.current.disconnect();
       }
     };
-  }, [accessToken, securityId]);
+  }, [accessToken, securityId, exchangeSegment]);
 
   return (
     <div className="glass rounded-lg p-6">

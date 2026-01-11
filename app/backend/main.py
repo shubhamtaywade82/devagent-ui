@@ -494,6 +494,12 @@ class OptionChainRequest(BaseModel):
     expiry: str
 
 
+class ExpiryListRequest(BaseModel):
+    access_token: str
+    under_security_id: int
+    under_exchange_segment: str
+
+
 class HistoricalDataRequest(BaseModel):
     access_token: Optional[str] = None  # Optional - can use DHAN_ACCESS_TOKEN env var as fallback
     security_id: Union[int, str]  # Accept both int and string (official example uses string)
@@ -1828,7 +1834,7 @@ async def get_instrument_list_segmentwise(request: InstrumentListSegmentwiseRequ
 
 
 @app.post("/api/trading/expiry-list")
-async def get_expiry_list(request: OptionChainRequest):
+async def get_expiry_list(request: ExpiryListRequest):
     """Get expiry list for underlying"""
     result = trading_service.get_expiry_list(
         request.access_token,

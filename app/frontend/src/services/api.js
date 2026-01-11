@@ -164,6 +164,11 @@ export default {
     return response.data;
   },
 
+  async getExpiryList(data) {
+    const response = await api.post("/api/trading/expiry-list", data);
+    return response.data;
+  },
+
   async getHistoricalData(data) {
     const response = await api.post("/api/trading/market/historical", data);
     return response.data;

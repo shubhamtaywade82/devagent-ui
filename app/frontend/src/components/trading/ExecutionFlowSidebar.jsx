@@ -105,16 +105,26 @@ function ExecutionFlowSidebar({ executionSteps, showSidebar, onToggle }) {
                       </details>
                     )}
                     {step.result && step.status !== "active" && (
-                      <div className={`mt-2 text-[10px] p-2 rounded ${
-                        step.status === "error"
-                          ? "text-red-300 bg-red-500/10"
-                          : "text-green-300 bg-green-500/10"
-                      }`}>
-                        <div className="font-medium mb-1">
-                          {step.status === "error" ? "Error:" : "Result:"}
+                      <details className="mt-2">
+                        <summary className={`text-[10px] font-medium cursor-pointer ${
+                          step.status === "error"
+                            ? "text-red-400 hover:text-red-300"
+                            : "text-green-400 hover:text-green-300"
+                        }`}>
+                          {step.status === "error" ? "View Error" : "View Result"}
+                        </summary>
+                        <div className={`mt-2 text-[10px] p-2 rounded ${
+                          step.status === "error"
+                            ? "text-red-300 bg-red-500/10"
+                            : "text-green-300 bg-green-500/10"
+                        }`}>
+                          {typeof step.result === "string" ? (
+                            <div className="whitespace-pre-wrap break-words">{step.result}</div>
+                          ) : (
+                            <pre className="overflow-x-auto">{JSON.stringify(step.result, null, 2)}</pre>
+                          )}
                         </div>
-                        {step.result}
-                      </div>
+                      </details>
                     )}
                   </div>
                 </div>

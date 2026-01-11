@@ -1,14 +1,15 @@
-import { useState, useEffect } from "react";
-import { Search, TrendingUp } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { TrendingUp } from "lucide-react";
 import api from "../../services/api";
 import RealTimeMarketFeed from "./RealTimeMarketFeed";
-import InstrumentSearch from "./InstrumentSearch";
+import OptionChain from "./OptionChain";
 
 function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared }) {
   const [selectedInstrument, setSelectedInstrument] = useState(null);
   const [quoteData, setQuoteData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const fetchTimeoutRef = useRef(null);
 
   // Handle initial instrument from header search
   useEffect(() => {
@@ -20,7 +21,13 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
         const newId = initialInstrument.securityId;
         if (currentId !== newId) {
           setSelectedInstrument(initialInstrument);
-          fetchMarketQuote(initialInstrument);
+          // Add small delay to prevent rapid duplicate calls
+          if (fetchTimeoutRef.current) {
+            clearTimeout(fetchTimeoutRef.current);
+          }
+          fetchTimeoutRef.current = setTimeout(() => {
+            fetchMarketQuote(initialInstrument);
+          }, 150); // 150ms debounce
         }
       } else {
         setError(
@@ -106,6 +113,12 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
       return;
     }
 
+    // Clear any pending fetch to prevent duplicate calls
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = null;
+    }
+
     setLoading(true);
     setError("");
     try {
@@ -133,25 +146,93 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
         securities: { [exchangeSegment]: [securityId] },
       });
 
+      // Check if response indicates failure
+      if (response.data?.status === 'failure' || response.data?.status === 'failed') {
+        let errorMsg = "Failed to get market quote";
+        const responseData = response.data;
+        const remarks = responseData?.remarks;
+        let data = responseData?.data;
+
+        // Handle nested data structure: data.data.805
+        if (data?.data && typeof data.data === 'object') {
+          data = data.data;
+        }
+
+        // First, check if error message is in data object (e.g., data.805 = "Too many requests...")
+        if (data && typeof data === 'object') {
+          const dataKeys = Object.keys(data);
+          for (const key of dataKeys) {
+            const value = data[key];
+            if (typeof value === 'string' && value.length > 0) {
+              errorMsg = value;
+              break;
+            }
+          }
+        }
+
+        // If no message found in data, check remarks
+        if (errorMsg === "Failed to get market quote" && remarks) {
+          if (typeof remarks === 'string') {
+            errorMsg = remarks;
+          } else if (typeof remarks === 'object') {
+            // Extract error message from object
+            errorMsg = remarks.error_message ||
+                      remarks.message ||
+                      remarks.error ||
+                      (remarks.error_code ? `Error ${remarks.error_code}` : null) ||
+                      (remarks.error_type ? `Error: ${remarks.error_type}` : null) ||
+                      errorMsg;
+          }
+        }
+
+        // Fallback to response.error
+        if (errorMsg === "Failed to get market quote" && response.error) {
+          errorMsg = response.error;
+        }
+
+        setError(errorMsg);
+        console.error("API returned failure:", responseData);
+        return;
+      }
+
       if (response.success) {
         // Parse the nested response structure
-        // Response structure: data.data.data.NSE_EQ.{securityId}
+        // Response structure: data.data.data.{EXCHANGE_SEGMENT}.{securityId}
         const responseData = response.data;
         let quoteInfo = null;
 
         // Try to extract the actual quote data from nested structure
+        // Handle both direct data.data and nested data.data.data structures
+        let nestedData = null;
         if (responseData?.data?.data) {
-          const nestedData = responseData.data.data;
-          // Find the first exchange segment and security
+          nestedData = responseData.data.data;
+        } else if (responseData?.data) {
+          nestedData = responseData.data;
+        }
+
+        if (nestedData) {
+          // Find the matching exchange segment and security
           for (const seg in nestedData) {
             const securities = nestedData[seg];
-            for (const secId in securities) {
-              quoteInfo = {
-                securityId: secId,
-                exchangeSegment: seg,
-                ...securities[secId],
-              };
-              break;
+            if (securities && typeof securities === 'object') {
+              // Look for the security ID in this segment
+              const secIdStr = securityId.toString();
+              if (securities[secIdStr] || securities[securityId]) {
+                const quote = securities[secIdStr] || securities[securityId];
+                quoteInfo = {
+                  securityId: secIdStr,
+                  exchangeSegment: seg,
+                  last_price: quote.last_price || quote.LTP || quote.lastPrice || quote.last_traded_price,
+                  ohlc: quote.ohlc || quote.OHLC || {
+                    open: quote.open || quote.OPEN,
+                    high: quote.high || quote.HIGH,
+                    low: quote.low || quote.LOW,
+                    close: quote.close || quote.CLOSE,
+                  },
+                  ...quote,
+                };
+                break;
+              }
             }
             if (quoteInfo) break;
           }
@@ -160,6 +241,7 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
         if (quoteInfo) {
           setQuoteData(quoteInfo);
         } else {
+          console.error("Could not parse quote data. Response structure:", responseData);
           setError("Could not parse quote data from response");
         }
       } else {
@@ -173,162 +255,136 @@ function MarketData({ accessToken, initialInstrument = null, onInstrumentCleared
   };
 
   return (
-    <div
-      className="h-full overflow-y-auto p-6"
-      style={{ position: "relative" }}
-    >
-      <div className="max-w-4xl mx-auto relative" style={{ zIndex: 1 }}>
-        <div
-          className="glass rounded-xl p-8 mb-6 relative"
-          style={{ zIndex: 1 }}
-        >
-          <div className="flex items-center gap-3 mb-6">
-            <TrendingUp className="w-6 h-6 text-green-500" />
-            <h2 className="text-2xl font-bold font-manrope">Market Data</h2>
-          </div>
-
-          <div className="space-y-4 relative" style={{ zIndex: 1000 }}>
-            <InstrumentSearch
-              onSelect={handleInstrumentSelect}
-              placeholder="Search by symbol name (e.g., HDFC BANK, RELIANCE) or Security ID..."
-              accessToken={accessToken}
-            />
-            {selectedInstrument && (
-              <div className="text-sm">
-                {selectedInstrument.securityId ? (
-                  <div className="text-zinc-400">
-                    Selected:{" "}
-                    <span className="text-white font-medium">
-                      {selectedInstrument.displayName ||
-                        selectedInstrument.symbolName}
-                    </span>{" "}
-                    (ID: {selectedInstrument.securityId},{" "}
-                    {selectedInstrument.exchangeSegment})
-                    {selectedInstrument.underlyingSymbol && (
-                      <span className="ml-2 text-zinc-500">
-                        | Underlying:{" "}
-                        <span className="text-zinc-300">
-                          {selectedInstrument.underlyingSymbol}
-                        </span>
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-red-400 bg-red-500/20 border border-red-500/50 rounded-lg p-3">
-                    ⚠️ Selected instrument "
-                    {selectedInstrument.displayName ||
-                      selectedInstrument.symbolName}
-                    " is missing Security ID. This instrument may not be
-                    tradable or may require a different identifier. Please
-                    select a different instrument.
-                  </div>
-                )}
-              </div>
+    <div className="h-full overflow-y-auto p-6">
+      {/* Header */}
+      <div className="mb-6">
+        <div className="flex items-center gap-3 mb-2">
+          <TrendingUp className="w-6 h-6 text-green-500" />
+          <h2 className="text-2xl font-bold font-manrope">Market Data</h2>
+        </div>
+        {selectedInstrument && selectedInstrument.securityId && (
+          <div className="text-sm text-zinc-400">
+            Selected:{" "}
+            <span className="text-white font-medium">
+              {selectedInstrument.displayName ||
+                selectedInstrument.symbolName}
+            </span>{" "}
+            (ID: {selectedInstrument.securityId},{" "}
+            {selectedInstrument.exchangeSegment})
+            {selectedInstrument.underlyingSymbol && (
+              <span className="ml-2 text-zinc-500">
+                | Underlying:{" "}
+                <span className="text-zinc-300">
+                  {selectedInstrument.underlyingSymbol}
+                </span>
+              </span>
             )}
           </div>
+        )}
+        {error && (
+          <div className="mt-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+      </div>
 
-          {error && (
-            <div className="mt-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
-              {error}
-            </div>
-          )}
+      {!selectedInstrument && (
+        <div className="glass rounded-xl p-12 text-center">
+          <TrendingUp className="w-16 h-16 text-zinc-600 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-zinc-400 mb-2">
+            No Instrument Selected
+          </h3>
+          <p className="text-sm text-zinc-500">
+            Use the search bar in the header to select an instrument and view its market data
+          </p>
         </div>
+      )}
 
-        {quoteData && (
-          <>
-            <div className="glass rounded-xl p-8 mb-6">
-              <h3 className="text-lg font-semibold mb-4">Quote Data</h3>
-
-              {/* Last Price */}
-              <div className="mb-6">
-                <div className="bg-zinc-900 rounded-lg p-6">
-                  <div className="text-sm text-zinc-400 mb-2">
-                    Last Traded Price
-                  </div>
-                  <div className="text-4xl font-bold text-green-500">
-                    ₹{quoteData.last_price?.toFixed(2) || "0.00"}
-                  </div>
-                  <div className="text-xs text-zinc-500 mt-2">
-                    Security ID: {quoteData.securityId} | Exchange:{" "}
-                    {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
-                    {selectedInstrument?.underlyingSymbol && (
-                      <> | Underlying: <span className="text-zinc-400">{selectedInstrument.underlyingSymbol}</span></>
-                    )}
-                  </div>
+      {quoteData && selectedInstrument && (
+        <>
+          {/* Quote Data - Combined LTP and OHLC */}
+          <div className="glass rounded-xl p-6 mb-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Left Side - Last Traded Price */}
+              <div>
+                <div className="text-sm text-zinc-400 mb-2">Last Traded Price</div>
+                <div className="text-5xl font-bold text-green-500 mb-4">
+                  ₹{quoteData.last_price?.toFixed(2) || "0.00"}
+                </div>
+                <div className="text-xs text-zinc-500">
+                  Security ID: {quoteData.securityId} | Exchange:{" "}
+                  {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
+                  {selectedInstrument?.underlyingSymbol && (
+                    <> | Underlying: <span className="text-zinc-400">{selectedInstrument.underlyingSymbol}</span></>
+                  )}
                 </div>
               </div>
 
-              {/* OHLC Data */}
+              {/* Right Side - OHLC Data */}
               {quoteData.ohlc && (
                 <div>
-                  <h4 className="text-sm font-medium text-zinc-400 mb-3">
+                  <h4 className="text-sm font-medium text-zinc-400 mb-4">
                     OHLC (Open, High, Low, Close)
                   </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div className="bg-zinc-900 rounded-lg p-4">
-                      <div className="text-sm text-zinc-400 mb-1">Open</div>
-                      <div className="text-lg font-semibold text-white">
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Open</span>
+                      <span className="text-lg font-semibold text-white">
                         ₹{quoteData.ohlc.open?.toFixed(2) || "0.00"}
-                      </div>
+                      </span>
                     </div>
-                    <div className="bg-zinc-900 rounded-lg p-4">
-                      <div className="text-sm text-zinc-400 mb-1">High</div>
-                      <div className="text-lg font-semibold text-green-400">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">High</span>
+                      <span className="text-lg font-semibold text-green-400">
                         ₹{quoteData.ohlc.high?.toFixed(2) || "0.00"}
-                      </div>
+                      </span>
                     </div>
-                    <div className="bg-zinc-900 rounded-lg p-4">
-                      <div className="text-sm text-zinc-400 mb-1">Low</div>
-                      <div className="text-lg font-semibold text-red-400">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Low</span>
+                      <span className="text-lg font-semibold text-red-400">
                         ₹{quoteData.ohlc.low?.toFixed(2) || "0.00"}
-                      </div>
+                      </span>
                     </div>
-                    <div className="bg-zinc-900 rounded-lg p-4">
-                      <div className="text-sm text-zinc-400 mb-1">Close</div>
-                      <div className="text-lg font-semibold text-white">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Close</span>
+                      <span className="text-lg font-semibold text-white">
                         ₹{quoteData.ohlc.close?.toFixed(2) || "0.00"}
-                      </div>
+                      </span>
                     </div>
                   </div>
                 </div>
               )}
             </div>
+          </div>
 
+          {/* Bottom Row - Real-Time Feed and Option Chain */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* Real-Time Market Feed */}
-            {selectedInstrument && (
+            <div>
               <RealTimeMarketFeed
                 accessToken={accessToken}
                 securityId={parseInt(selectedInstrument.securityId)}
                 exchangeSegment={selectedInstrument.exchangeSegment || "NSE_EQ"}
               />
-            )}
-          </>
-        )}
-
-        <div className="mt-6 glass rounded-xl p-8">
-          <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-zinc-900 rounded-lg p-4">
-              <h4 className="text-sm font-medium text-zinc-400 mb-2">
-                Option Chain
-              </h4>
-              <p className="text-sm text-zinc-500">
-                View option chain for Nifty, Bank Nifty, etc.
-              </p>
-              <p className="text-xs text-zinc-600 mt-2">Coming soon...</p>
             </div>
-            <div className="bg-zinc-900 rounded-lg p-4">
-              <h4 className="text-sm font-medium text-zinc-400 mb-2">
-                Historical Data
-              </h4>
-              <p className="text-sm text-zinc-500">
-                Get historical OHLC data for analysis
-              </p>
-              <p className="text-xs text-zinc-600 mt-2">Coming soon...</p>
+
+            {/* Option Chain - Only for indices */}
+            <div>
+              <OptionChain
+                accessToken={accessToken}
+                selectedInstrument={selectedInstrument}
+              />
             </div>
           </div>
+        </>
+      )}
+
+      {/* Additional Info Section */}
+      {selectedInstrument && !quoteData && !loading && (
+        <div className="glass rounded-xl p-8 text-center">
+          <div className="text-zinc-400">Loading market data...</div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

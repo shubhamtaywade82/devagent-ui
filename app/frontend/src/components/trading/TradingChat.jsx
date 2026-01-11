@@ -85,6 +85,7 @@ function TradingChat({ accessToken }) {
       const decoder = new TextDecoder();
       let assistantMessage = "";
       let hasError = false;
+      let isFirstContentChunk = true;
 
       // Reset tool calls, reasoning, and execution steps for new message
       setCurrentToolCalls([]);
@@ -177,8 +178,13 @@ function TradingChat({ accessToken }) {
                 continue;
               }
 
-              // Handle content
-              const content = data.content || "";
+              // Handle content (either with type: "content" or just data.content)
+              const content = (data.type === "content" || !data.type) ? (data.content || "") : "";
+
+              // Skip if this is not a content message
+              if (data.type && data.type !== "content" && data.type !== "tool_calls" && data.type !== "reasoning") {
+                continue;
+              }
 
               // If it's an error, replace the message content
               if (data.error) {
@@ -191,7 +197,45 @@ function TradingChat({ accessToken }) {
                   newMessages[newMessages.length - 1].content = errorMsg;
                   return newMessages;
                 });
+                // Mark planning as completed even on error
+                setExecutionSteps((prev) => {
+                  return prev.map(step =>
+                    step.type === "planning" && step.status === "active"
+                      ? { ...step, status: "completed", description: "Analysis completed" }
+                      : step
+                  );
+                });
                 break;
+              }
+
+              // If we have content, mark planning as completed and add response step
+              if (content.length > 0) {
+                // Mark planning step as completed when first content arrives
+                if (isFirstContentChunk) {
+                  setExecutionSteps((prev) => {
+                    const newSteps = prev.map(step =>
+                      step.type === "planning" && step.status === "active"
+                        ? { ...step, status: "completed", description: "Analysis completed" }
+                        : step
+                    );
+
+                    // Add response generation step if it doesn't exist
+                    const hasResponseStep = newSteps.some(s => s.type === "response");
+                    if (!hasResponseStep) {
+                      newSteps.push({
+                        id: Date.now(),
+                        type: "response",
+                        status: "active",
+                        title: "Generating response",
+                        description: "Formulating the final answer...",
+                        timestamp: new Date().toISOString()
+                      });
+                    }
+
+                    return newSteps;
+                  });
+                  isFirstContentChunk = false;
+                }
               }
 
               assistantMessage += content;
@@ -201,34 +245,20 @@ function TradingChat({ accessToken }) {
                 return newMessages;
               });
 
-              // Add final response step when content starts coming
-              if (assistantMessage.length === content.length && content.length > 0) {
-                // First chunk of content - add response generation step
-                setExecutionSteps((prev) => {
-                  const hasResponseStep = prev.some(s => s.type === "response");
-                  if (!hasResponseStep) {
-                    return [...prev, {
-                      id: Date.now(),
-                      type: "response",
-                      status: "active",
-                      title: "Generating response",
-                      description: "Formulating the final answer...",
-                      timestamp: new Date().toISOString()
-                    }];
-                  }
-                  return prev;
-                });
-              }
-
               // Stop if we get a done flag
               if (data.done) {
-                // Mark response step as completed
+                // Mark all active steps as completed
                 setExecutionSteps((prev) => {
-                  return prev.map(step =>
-                    step.type === "response" && step.status === "active"
-                      ? { ...step, status: "completed", description: "Response generated successfully" }
-                      : step
-                  );
+                  return prev.map(step => {
+                    if (step.status === "active") {
+                      if (step.type === "response") {
+                        return { ...step, status: "completed", description: "Response generated successfully" };
+                      } else if (step.type === "planning") {
+                        return { ...step, status: "completed", description: "Analysis completed" };
+                      }
+                    }
+                    return step;
+                  });
                 });
                 break;
               }
@@ -247,6 +277,14 @@ function TradingChat({ accessToken }) {
           newMessages[newMessages.length - 1].content =
             "⚠️ No response received. Please check if Ollama is running or if the API is configured correctly.";
           return newMessages;
+        });
+        // Mark planning as completed even if no content
+        setExecutionSteps((prev) => {
+          return prev.map(step =>
+            step.type === "planning" && step.status === "active"
+              ? { ...step, status: "completed", description: "Analysis completed" }
+              : step
+          );
         });
       }
     } catch (error) {

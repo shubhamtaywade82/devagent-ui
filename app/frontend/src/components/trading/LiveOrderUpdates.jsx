@@ -61,67 +61,85 @@ function LiveOrderUpdates({ accessToken }) {
   };
 
   return (
-    <div className="glass rounded-lg p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <Bell className="w-5 h-5 text-green-500" />
-          <h3 className="text-lg font-semibold">Live Order Updates</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          {isConnected ? (
-            <>
-              <Wifi className="w-4 h-4 text-green-500" />
-              <span className="text-xs text-green-500">Connected</span>
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-4 h-4 text-red-500" />
-              <span className="text-xs text-red-500">Disconnected</span>
-            </>
+    <div className="h-full overflow-y-auto p-6">
+      <div className="max-w-6xl mx-auto">
+        <div className="glass rounded-xl p-8 mb-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <Bell className="w-6 h-6 text-green-500" />
+              <h2 className="text-2xl font-bold font-manrope">Live Order Updates</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              {isConnected ? (
+                <>
+                  <Wifi className="w-5 h-5 text-green-500" />
+                  <span className="text-sm text-green-500 font-medium">Connected</span>
+                </>
+              ) : (
+                <>
+                  <WifiOff className="w-5 h-5 text-red-500" />
+                  <span className="text-sm text-red-500 font-medium">Disconnected</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-4 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400">
+              <div className="font-medium mb-1">WebSocket Connection Error</div>
+              <div className="text-sm">{error}</div>
+            </div>
+          )}
+
+          {!error && !isConnected && (
+            <div className="mb-4 p-4 bg-yellow-500/20 border border-yellow-500/50 rounded-lg text-yellow-400 text-sm">
+              Connecting to order updates stream...
+            </div>
           )}
         </div>
-      </div>
 
-      {error && (
-        <div className="mb-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-400 text-sm">
-          {error}
-        </div>
-      )}
-
-      <div className="space-y-2 max-h-96 overflow-y-auto">
-        {orderUpdates.length === 0 ? (
-          <div className="text-center text-zinc-500 py-8">
-            No order updates yet. Orders will appear here in real-time.
+        <div className="glass rounded-xl p-8">
+          <h3 className="text-lg font-semibold mb-4">Recent Order Updates</h3>
+          <div className="space-y-3">
+            {orderUpdates.length === 0 ? (
+              <div className="text-center text-zinc-500 py-12">
+                <Bell className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
+                <div className="text-lg mb-2">No order updates yet</div>
+                <div className="text-sm">Orders will appear here in real-time as they are placed and executed</div>
+              </div>
+            ) : (
+              orderUpdates.map((update, idx) => (
+                <div
+                  key={idx}
+                  className="bg-zinc-900 rounded-lg p-4 border border-zinc-800 hover:border-zinc-700 transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-4 flex-1">
+                      {getStatusIcon(update.orderStatus || update.status)}
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-white mb-1">
+                          {update.tradingSymbol || update.symbol || "N/A"}
+                        </div>
+                        <div className="text-xs text-zinc-400">
+                          Order ID: {update.orderId || update.order_id || "N/A"} •{" "}
+                          {update.orderStatus || update.status || "PENDING"}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right ml-4">
+                      <div className="text-sm font-medium text-white mb-1">
+                        Qty: {update.quantity || update.qty || 0}
+                      </div>
+                      <div className="text-xs text-zinc-400">
+                        ₹{update.price?.toFixed(2) || "0.00"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
-        ) : (
-          orderUpdates.map((update, idx) => (
-            <div
-              key={idx}
-              className="bg-zinc-900 rounded-lg p-3 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-3">
-                {getStatusIcon(update.orderStatus || update.status)}
-                <div>
-                  <div className="text-sm font-medium text-white">
-                    Order ID: {update.orderId || update.order_id}
-                  </div>
-                  <div className="text-xs text-zinc-400">
-                    {update.tradingSymbol || update.symbol} •{" "}
-                    {update.orderStatus || update.status}
-                  </div>
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-sm text-white">
-                  Qty: {update.quantity || update.qty}
-                </div>
-                <div className="text-xs text-zinc-400">
-                  ₹{update.price?.toFixed(2) || "0.00"}
-                </div>
-              </div>
-            </div>
-          ))
-        )}
+        </div>
       </div>
     </div>
   );

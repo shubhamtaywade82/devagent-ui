@@ -11,6 +11,7 @@ import {
   X,
   ExternalLink,
   Search,
+  Bell,
 } from "lucide-react";
 import TradingDashboard from "../components/trading/TradingDashboard";
 import OrderPlacement from "../components/trading/OrderPlacement";
@@ -21,6 +22,7 @@ import LiveOrderUpdates from "../components/trading/LiveOrderUpdates";
 import TradingChat from "../components/trading/TradingChat";
 import IndexIndicators from "../components/trading/IndexIndicators";
 import InstrumentSearch from "../components/trading/InstrumentSearch";
+import Positions from "../components/trading/Positions";
 import api from "../services/api";
 
 function TradingPage() {
@@ -164,9 +166,9 @@ function TradingPage() {
           </div>
         </button>
         <button
-          onClick={() => setActiveTab("orders")}
+          onClick={() => setActiveTab("place-order")}
           className={`px-6 py-3 text-sm font-medium transition-colors ${
-            activeTab === "orders"
+            activeTab === "place-order"
               ? "border-b-2 border-green-500 text-green-400"
               : "text-zinc-400 hover:text-zinc-300"
           }`}
@@ -202,6 +204,19 @@ function TradingPage() {
             Market Data
           </div>
         </button>
+        <button
+          onClick={() => setActiveTab("order-updates")}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === "order-updates"
+              ? "border-b-2 border-green-500 text-green-400"
+              : "text-zinc-400 hover:text-zinc-300"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Bell className="w-4 h-4" />
+            Orders
+          </div>
+        </button>
       </div>
 
       {/* Content */}
@@ -210,7 +225,7 @@ function TradingPage() {
           {activeTab === "dashboard" && (
             <TradingDashboard accessToken={accessToken} />
           )}
-          {activeTab === "orders" && (
+          {activeTab === "place-order" && (
             <OrderPlacement accessToken={accessToken} />
           )}
           {activeTab === "portfolio" && (
@@ -223,14 +238,17 @@ function TradingPage() {
               onInstrumentCleared={() => setHeaderSelectedInstrument(null)}
             />
           )}
+          {activeTab === "order-updates" && (
+            <LiveOrderUpdates accessToken={accessToken} />
+          )}
         </div>
 
         {/* Sidebars */}
         {isAuthenticated && (
           <>
-            {/* Live Order Updates Sidebar */}
+            {/* Positions Sidebar */}
             <div className="w-80 border-l border-zinc-800 overflow-hidden flex flex-col">
-              <LiveOrderUpdates accessToken={accessToken} />
+              <Positions accessToken={accessToken} />
             </div>
 
             {/* Trading Chat Sidebar - Collapsible */}
