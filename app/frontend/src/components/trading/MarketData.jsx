@@ -10,6 +10,44 @@ function MarketData({ accessToken }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Helper function to get exchange name from exchange segment or instrument data
+  const getExchangeName = (exchangeSegment, instrument = null) => {
+    // First try to get from instrument's exchange field (set by InstrumentSearch)
+    if (instrument?.exchange) {
+      return instrument.exchange;
+    }
+
+    // Try to get from instrument's original data
+    if (instrument?.instrument) {
+      const exchange = instrument.instrument.SEM_EXM_EXCH_ID ||
+                      instrument.instrument.EXCH_ID ||
+                      instrument.instrument.EXCHANGE_ID;
+      if (exchange) {
+        return exchange.toUpperCase();
+      }
+    }
+
+    // Fallback: extract from exchange segment format
+    if (exchangeSegment === "IDX_I") {
+      // For indices, we need to determine NSE or BSE from the instrument
+      // NIFTY 50 (ID: 13) is NSE, SENSEX (ID: 51) is BSE
+      if (instrument?.securityId) {
+        const secId = parseInt(instrument.securityId);
+        if (secId === 13) return "NSE"; // NIFTY 50
+        if (secId === 51) return "BSE"; // SENSEX
+      }
+      // Default for IDX_I if we can't determine
+      return "NSE";
+    }
+
+    // Extract exchange from segment format (e.g., "NSE_EQ" -> "NSE")
+    if (exchangeSegment && exchangeSegment.includes("_")) {
+      return exchangeSegment.split("_")[0];
+    }
+
+    return exchangeSegment || "NSE";
+  };
+
   const handleInstrumentSelect = (instrument) => {
     if (!instrument) {
       setSelectedInstrument(null);
@@ -173,7 +211,7 @@ function MarketData({ accessToken }) {
                   </div>
                   <div className="text-xs text-zinc-500 mt-2">
                     Security ID: {quoteData.securityId} | Exchange:{" "}
-                    {quoteData.exchangeSegment}
+                    {getExchangeName(quoteData.exchangeSegment, selectedInstrument)}
                   </div>
                 </div>
               </div>

@@ -14,7 +14,7 @@ function InstrumentSearch({
     indices: [],
     equity: [],
     options: [],
-    other: []
+    other: [],
   });
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -38,8 +38,13 @@ function InstrumentSearch({
   // Categorize instrument by type
   const categorizeInstrument = (instrument) => {
     const segment = instrument.SEM_SEGMENT || instrument.SEGMENT || "";
-    const instrumentType = (instrument.INSTRUMENT || instrument.INSTRUMENT_TYPE || "").toUpperCase();
-    const exchangeSegment = instrument.SEM_EXM_EXCH_ID || instrument.EXCH_ID || "";
+    const instrumentType = (
+      instrument.INSTRUMENT ||
+      instrument.INSTRUMENT_TYPE ||
+      ""
+    ).toUpperCase();
+    const exchangeSegment =
+      instrument.SEM_EXM_EXCH_ID || instrument.EXCH_ID || "";
 
     // Check for indices
     if (
@@ -52,7 +57,11 @@ function InstrumentSearch({
 
     // Check for options (F&O segment with OPT in instrument type or name)
     if (segment === "D") {
-      const symbolName = (instrument.SYMBOL_NAME || instrument.SEM_SYMBOL_NAME || "").toUpperCase();
+      const symbolName = (
+        instrument.SYMBOL_NAME ||
+        instrument.SEM_SYMBOL_NAME ||
+        ""
+      ).toUpperCase();
       if (instrumentType.includes("OPT") || symbolName.includes("OPT")) {
         return "options";
       }
@@ -74,7 +83,7 @@ function InstrumentSearch({
         indices: [],
         equity: [],
         options: [],
-        other: []
+        other: [],
       });
       setShowSuggestions(false);
       return;
@@ -89,7 +98,7 @@ function InstrumentSearch({
           indices: [],
           equity: [],
           options: [],
-          other: []
+          other: [],
         });
         setShowSuggestions(false);
         return;
@@ -98,48 +107,46 @@ function InstrumentSearch({
       // Optimized filtering - limit search to first 10000 instruments for performance
       // Most common instruments are usually at the top
       const searchLimit = Math.min(instruments.length, 10000);
-      const filtered = instruments
-        .slice(0, searchLimit)
-        .filter((inst) => {
-          const symbolName = (
-            inst.SYMBOL_NAME ||
-            inst.SEM_SYMBOL_NAME ||
-            inst.SM_SYMBOL_NAME ||
-            ""
-          ).toLowerCase();
-          const tradingSymbol = (
-            inst.SEM_TRADING_SYMBOL ||
-            inst.TRADING_SYMBOL ||
-            ""
-          ).toLowerCase();
-          const displayName = (
-            inst.DISPLAY_NAME ||
-            inst.SEM_CUSTOM_SYMBOL ||
-            ""
-          ).toLowerCase();
-          const securityId = (
-            inst.SEM_SECURITY_ID ||
-            inst.SECURITY_ID ||
-            inst.SM_SECURITY_ID ||
-            ""
-          ).toString();
-          const isin = (inst.ISIN || "").toLowerCase();
+      const filtered = instruments.slice(0, searchLimit).filter((inst) => {
+        const symbolName = (
+          inst.SYMBOL_NAME ||
+          inst.SEM_SYMBOL_NAME ||
+          inst.SM_SYMBOL_NAME ||
+          ""
+        ).toLowerCase();
+        const tradingSymbol = (
+          inst.SEM_TRADING_SYMBOL ||
+          inst.TRADING_SYMBOL ||
+          ""
+        ).toLowerCase();
+        const displayName = (
+          inst.DISPLAY_NAME ||
+          inst.SEM_CUSTOM_SYMBOL ||
+          ""
+        ).toLowerCase();
+        const securityId = (
+          inst.SEM_SECURITY_ID ||
+          inst.SECURITY_ID ||
+          inst.SM_SECURITY_ID ||
+          ""
+        ).toString();
+        const isin = (inst.ISIN || "").toLowerCase();
 
-          return (
-            symbolName.includes(query) ||
-            tradingSymbol.includes(query) ||
-            displayName.includes(query) ||
-            securityId.includes(query) ||
-            isin.includes(query)
-          );
-        });
+        return (
+          symbolName.includes(query) ||
+          tradingSymbol.includes(query) ||
+          displayName.includes(query) ||
+          securityId.includes(query) ||
+          isin.includes(query)
+        );
+      });
 
       // Group by category
       const grouped = {
         indices: [],
         equity: [],
         options: [],
-        other: []
+        other: [],
       };
 
       filtered.forEach((inst) => {
@@ -158,9 +165,9 @@ function InstrumentSearch({
       setFilteredInstruments(grouped);
       setShowSuggestions(
         grouped.indices.length > 0 ||
-        grouped.equity.length > 0 ||
-        grouped.options.length > 0 ||
-        grouped.other.length > 0
+          grouped.equity.length > 0 ||
+          grouped.options.length > 0 ||
+          grouped.other.length > 0
       );
     }, 200); // 200ms debounce
 
@@ -221,7 +228,11 @@ function InstrumentSearch({
 
           let loadedInstruments = [];
 
-          if (nseResponse.status === "fulfilled" && nseResponse.value && nseResponse.value.success) {
+          if (
+            nseResponse.status === "fulfilled" &&
+            nseResponse.value &&
+            nseResponse.value.success
+          ) {
             const nseList =
               nseResponse.value.data?.instruments ||
               nseResponse.value.data?.data ||
@@ -231,10 +242,17 @@ function InstrumentSearch({
               console.log(`Loaded ${nseList.length} instruments from NSE_EQ`);
             }
           } else {
-            console.warn("NSE_EQ API failed:", nseResponse.reason || nseResponse.value);
+            console.warn(
+              "NSE_EQ API failed:",
+              nseResponse.reason || nseResponse.value
+            );
           }
 
-          if (bseResponse.status === "fulfilled" && bseResponse.value && bseResponse.value.success) {
+          if (
+            bseResponse.status === "fulfilled" &&
+            bseResponse.value &&
+            bseResponse.value.success
+          ) {
             const bseList =
               bseResponse.value.data?.instruments ||
               bseResponse.value.data?.data ||
@@ -244,7 +262,10 @@ function InstrumentSearch({
               console.log(`Loaded ${bseList.length} instruments from BSE_EQ`);
             }
           } else {
-            console.warn("BSE_EQ API failed:", bseResponse.reason || bseResponse.value);
+            console.warn(
+              "BSE_EQ API failed:",
+              bseResponse.reason || bseResponse.value
+            );
           }
 
           if (loadedInstruments.length > 0) {
@@ -260,7 +281,9 @@ function InstrumentSearch({
             );
           } else {
             // Fallback to CSV if both fail
-            console.log("No instruments from segmentwise API, trying CSV fallback");
+            console.log(
+              "No instruments from segmentwise API, trying CSV fallback"
+            );
             response = await api.getInstrumentListCSV("detailed");
           }
         } catch (err) {
@@ -289,7 +312,9 @@ function InstrumentSearch({
 
         if (finalList.length === 0) {
           console.warn("No instruments found in response:", response);
-          setError("No instruments found. Please try syncing instruments first.");
+          setError(
+            "No instruments found. Please try syncing instruments first."
+          );
         } else {
           setInstruments(finalList);
           // Cache instruments if no specific exchangeSegment (for reuse)
@@ -304,7 +329,8 @@ function InstrumentSearch({
         setError(errorMsg);
       }
     } catch (err) {
-      const errorMsg = err.message || err.toString() || "Failed to load instruments";
+      const errorMsg =
+        err.message || err.toString() || "Failed to load instruments";
       setError(errorMsg);
       console.error("Error loading instruments:", err);
     } finally {
@@ -338,7 +364,11 @@ function InstrumentSearch({
     const seg = (segment || "").toString().toUpperCase();
 
     // Check instrument type for indices
-    const instrumentType = (instrument.INSTRUMENT || instrument.INSTRUMENT_TYPE || "").toUpperCase();
+    const instrumentType = (
+      instrument.INSTRUMENT ||
+      instrument.INSTRUMENT_TYPE ||
+      ""
+    ).toUpperCase();
 
     // Handle indices first - segment "I" or "INDEX", or instrument type "INDEX" should use IDX_I
     if (seg === "I" || seg === "INDEX" || instrumentType === "INDEX") {
@@ -382,6 +412,7 @@ function InstrumentSearch({
     const instrumentData = {
       securityId: securityId.toString().trim(),
       exchangeSegment: exchangeSegmentFormatted,
+      exchange: exchange, // Store the original exchange (NSE, BSE, etc.)
       symbolName:
         instrument.SYMBOL_NAME ||
         instrument.SEM_SYMBOL_NAME ||
@@ -444,9 +475,7 @@ function InstrumentSearch({
     const tradingSymbol =
       instrument.SEM_TRADING_SYMBOL || instrument.TRADING_SYMBOL || "";
     const displayName =
-      instrument.DISPLAY_NAME ||
-      instrument.SEM_CUSTOM_SYMBOL ||
-      symbolName;
+      instrument.DISPLAY_NAME || instrument.SEM_CUSTOM_SYMBOL || symbolName;
     const hasValidId =
       securityId &&
       securityId !== "N/A" &&
@@ -471,13 +500,8 @@ function InstrumentSearch({
               {tradingSymbol && tradingSymbol !== symbolName && (
                 <span className="mr-2">{tradingSymbol}</span>
               )}
-              <span
-                className={
-                  hasValidId ? "text-zinc-500" : "text-red-400"
-                }
-              >
-                ID: {securityId} |{" "}
-                {getExchangeSegmentDisplay(instrument)}
+              <span className={hasValidId ? "text-zinc-500" : "text-red-400"}>
+                ID: {securityId} | {getExchangeSegmentDisplay(instrument)}
                 {!hasValidId && " (Invalid - Missing Security ID)"}
               </span>
             </div>
@@ -492,11 +516,16 @@ function InstrumentSearch({
     if (!instruments || instruments.length === 0) return null;
 
     return (
-      <div key={category} className="border-b border-zinc-800/50 last:border-b-0">
+      <div
+        key={category}
+        className="border-b border-zinc-800/50 last:border-b-0"
+      >
         <div className="px-4 py-2 bg-zinc-800/30 text-zinc-300 text-xs font-semibold uppercase tracking-wider">
           {title}
         </div>
-        {instruments.map((instrument, idx) => renderInstrument(instrument, idx))}
+        {instruments.map((instrument, idx) =>
+          renderInstrument(instrument, idx)
+        )}
       </div>
     );
   };
@@ -513,10 +542,14 @@ function InstrumentSearch({
           onChange={(e) => setSearchQuery(e.target.value)}
           onFocus={() => {
             if (
-              (filteredInstruments.indices && filteredInstruments.indices.length > 0) ||
-              (filteredInstruments.equity && filteredInstruments.equity.length > 0) ||
-              (filteredInstruments.options && filteredInstruments.options.length > 0) ||
-              (filteredInstruments.other && filteredInstruments.other.length > 0)
+              (filteredInstruments.indices &&
+                filteredInstruments.indices.length > 0) ||
+              (filteredInstruments.equity &&
+                filteredInstruments.equity.length > 0) ||
+              (filteredInstruments.options &&
+                filteredInstruments.options.length > 0) ||
+              (filteredInstruments.other &&
+                filteredInstruments.other.length > 0)
             ) {
               setShowSuggestions(true);
             }
@@ -538,29 +571,38 @@ function InstrumentSearch({
       {error && <div className="mt-2 text-sm text-red-400">{error}</div>}
 
       {showSuggestions &&
-       (filteredInstruments.indices?.length > 0 ||
-        filteredInstruments.equity?.length > 0 ||
-        filteredInstruments.options?.length > 0 ||
-        filteredInstruments.other?.length > 0) && (
-        <div
-          ref={suggestionsRef}
-          className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl max-h-80 overflow-y-auto"
-          style={{ zIndex: 1001 }}
-        >
-          {renderSection("Indices", filteredInstruments.indices, "indices")}
-          {renderSection("Stocks / Equity", filteredInstruments.equity, "equity")}
-          {renderSection("Options", filteredInstruments.options, "options")}
-          {filteredInstruments.other && filteredInstruments.other.length > 0 &&
-           renderSection("Other", filteredInstruments.other, "other")}
-        </div>
-      )}
+        (filteredInstruments.indices?.length > 0 ||
+          filteredInstruments.equity?.length > 0 ||
+          filteredInstruments.options?.length > 0 ||
+          filteredInstruments.other?.length > 0) && (
+          <div
+            ref={suggestionsRef}
+            className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl max-h-80 overflow-y-auto"
+            style={{ zIndex: 1001 }}
+          >
+            {renderSection("Indices", filteredInstruments.indices, "indices")}
+            {renderSection(
+              "Stocks / Equity",
+              filteredInstruments.equity,
+              "equity"
+            )}
+            {renderSection("Options", filteredInstruments.options, "options")}
+            {filteredInstruments.other &&
+              filteredInstruments.other.length > 0 &&
+              renderSection("Other", filteredInstruments.other, "other")}
+          </div>
+        )}
 
       {showSuggestions &&
         searchQuery.length >= 2 &&
-        (!filteredInstruments.indices || filteredInstruments.indices.length === 0) &&
-        (!filteredInstruments.equity || filteredInstruments.equity.length === 0) &&
-        (!filteredInstruments.options || filteredInstruments.options.length === 0) &&
-        (!filteredInstruments.other || filteredInstruments.other.length === 0) && (
+        (!filteredInstruments.indices ||
+          filteredInstruments.indices.length === 0) &&
+        (!filteredInstruments.equity ||
+          filteredInstruments.equity.length === 0) &&
+        (!filteredInstruments.options ||
+          filteredInstruments.options.length === 0) &&
+        (!filteredInstruments.other ||
+          filteredInstruments.other.length === 0) && (
           <div
             className="absolute w-full mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl p-4 text-center text-zinc-400 text-sm"
             style={{ zIndex: 1001 }}
