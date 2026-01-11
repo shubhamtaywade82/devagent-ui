@@ -12,6 +12,7 @@ from .schemas import (
     DailyOHLCVSchema,
     IntradayOHLCVSchema,
     MarketQuoteSchema,
+    ExpiryListSchema,
     OptionChainWithExpirySchema,
 )
 
@@ -52,6 +53,7 @@ TOOL_INPUT_CONTRACTS: Dict[str, dict | SchemaResolver] = {
     # New, explicit tools
     "get_intraday_ohlcv": IntradayOHLCVSchema,
     "get_daily_ohlcv": DailyOHLCVSchema,
+    "get_expiry_list": ExpiryListSchema,
 
     # Option chain (concrete fetch requires expiry_date)
     "get_option_chain": OptionChainWithExpirySchema,

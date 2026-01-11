@@ -139,6 +139,16 @@ OptionChainWithExpirySchema: dict = {
     ]
 }
 
+ExpiryListSchema: dict = {
+    "type": "object",
+    "properties": {
+        "underlying_security_id": {"type": ["string", "integer"]},
+        "exchange_segment": {"type": "string", "enum": EXCHANGE_SEGMENT_ENUM},
+    },
+    "required": ["underlying_security_id", "exchange_segment"],
+    "additionalProperties": True,
+}
+
 
 OptionContractSchema: dict = {
     "type": "object",

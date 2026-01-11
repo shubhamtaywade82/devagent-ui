@@ -15,6 +15,7 @@ try:
     from agent.tools.get_intraday_ohlcv import GetIntradayOHLCVTool
     from agent.tools.get_daily_ohlcv import GetDailyOHLCVTool
     from agent.tools.get_option_chain import GetOptionChainTool
+    from agent.tools.get_expiry_list import GetExpiryListTool
 except ImportError:
     # Fallback for different import paths
     from app.agent.tools.base import Tool
@@ -25,6 +26,7 @@ except ImportError:
     from app.agent.tools.get_intraday_ohlcv import GetIntradayOHLCVTool
     from app.agent.tools.get_daily_ohlcv import GetDailyOHLCVTool
     from app.agent.tools.get_option_chain import GetOptionChainTool
+    from app.agent.tools.get_expiry_list import GetExpiryListTool
 
 
 # Registry of all available tools
@@ -89,6 +91,7 @@ def initialize_registry():
     register_tool(GetHistoricalDataTool())
     register_tool(GetIntradayOHLCVTool())
     register_tool(GetDailyOHLCVTool())
+    register_tool(GetExpiryListTool())
     register_tool(GetOptionChainTool())
     register_tool(AnalyzeMarketTool())
 
